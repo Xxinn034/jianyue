@@ -4,11 +4,6 @@
 纯 Java 从零实现，**无 Kotlin、无 AndroidX、无第三方 UI 库**——唯一例外是执行 `@js:` 书源
 规则用的改造版 Rhino（见 `THIRD-PARTY.md`）。
 
-![真机阅读页](tools/reader-paragraphs-phone-SHL25.png)
-
-已在三档真实环境端到端验证：Android 1.0 模拟器（API 1）、Android 4.1.2 模拟器（API 16）、
-Android 5.0.2 真机（SHL25）。
-
 ## 为什么做这个
 
 开源阅读（Legado）的 `minSdk` 是 21，2008 年的设备连装都装不上。本项目把「同一套书源规则
@@ -65,11 +60,6 @@ Copy-Item secrets.local.ps1.example secrets.local.ps1
 `ANDROID_SDK_ROOT`）→ 开发机上的绝对路径。所以本地和 CI 跑的是同一个脚本，CI 见
 `.github/workflows/release.yml`。
 
-产物：
-
-- `out/reader.apk` —— 验收脚本安装的就是这个路径，不要改名
-- `out/jianyue-v<版本>.apk` —— 发布用，文件名自带版本号
-
 构建流程：aapt 打包资源并生成 `R.java` → javac（API 1 的 jar 作 bootclasspath）→
 `d8 --min-api 1` → 把 dex 注入 APK → zipalign → apksigner 签名 → `aapt dump badging`
 断言版本号确实写进了 APK，并打印签名证书 SHA-256。
@@ -115,12 +105,6 @@ docs/                     设计记录、书源格式说明、API 1 能力实测
 
 更多：`docs/DEVELOPMENT.md`（开发细节）、`docs/多版本兼容性矩阵.md`、`docs/API1-能力实测记录.md`。
 
-## 验收
-
-三档设备各有一套脚本（`verify-on-api1.ps1`、`tools/verify-api16.ps1`、
-`tools/verify-local-import.ps1` 等），断言的是 logcat 里的真实运行结果，不是「没崩就算过」。
-
-注意：这些脚本写死了本机的设备序列号与书源路径，clone 之后需要自行调整。
 
 ## 书源
 
