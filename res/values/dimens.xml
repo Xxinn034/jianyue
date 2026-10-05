@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dimensions that are needed from BOTH a layout and code.
+
+  API 1's TextView has no getLineSpacingExtra(), so the reader's measuring view (which lays a
+  whole chapter out to find the real line breaks) has to be told the line spacing explicitly.
+  Keeping it here - and referencing it from act_reader.xml as well - leaves one source of truth:
+  if the reading line spacing is ever changed, the pagination follows automatically.
+-->
+<resources>
+    <dimen name="reader_line_spacing">8dip</dimen>
+</resources>

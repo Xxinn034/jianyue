@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- File picker: current path, list, action row. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical"
+    android:background="@color/bg">
+
+    <TextView
+        android:id="@+id/browser_path"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/surface"
+        android:paddingLeft="16dip"
+        android:paddingRight="16dip"
+        android:paddingTop="10dip"
+        android:paddingBottom="10dip"
+        android:textSize="12sp"
+        android:textColor="@color/text_secondary"
+        android:singleLine="true"
+        android:ellipsize="start"
+        android:text="/sdcard" />
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
+    <ListView
+        android:id="@+id/browser_list"
+        android:layout_width="fill_parent"
+        android:layout_height="0dip"
+        android:layout_weight="1"
+        android:divider="@color/divider"
+        android:dividerHeight="1dip"
+        android:cacheColorHint="#00000000" />
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
+    <LinearLayout
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="@color/bar_bg">
+
+        <TextView
+            android:id="@+id/browser_up"
+            style="@style/BarButton"
+            android:text="上一级" />
+
+        <View
+            android:layout_width="1dip"
+            android:layout_height="fill_parent"
+            android:background="@color/divider" />
+
+        <TextView
+            android:id="@+id/browser_roots"
+            style="@style/BarButton"
+            android:text="根目录" />
+
+        <View
+            android:layout_width="1dip"
+            android:layout_height="fill_parent"
+            android:background="@color/divider" />
+
+        <TextView
+            android:id="@+id/browser_search"
+            style="@style/BarButton"
+            android:text="存储卡" />
+
+        <View
+            android:layout_width="1dip"
+            android:layout_height="fill_parent"
+            android:background="@color/divider" />
+
+        <TextView
+            android:id="@+id/browser_cancel"
+            style="@style/BarButtonMuted"
+            android:text="取消" />
+    </LinearLayout>
+
+</LinearLayout>

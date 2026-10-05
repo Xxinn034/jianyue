@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shelf row: title on top, secondary line under it. No cover art, by design. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    style="@style/Row">
+
+    <TextView
+        android:id="@+id/row_title"
+        style="@style/RowTitle"
+        android:text="书名" />
+
+    <TextView
+        android:id="@+id/row_sub"
+        style="@style/RowSub"
+        android:text="副标题" />
+
+</LinearLayout>

@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Header injected into the detail ListView: book info block. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/surface"
+    android:paddingLeft="16dip"
+    android:paddingRight="16dip"
+    android:paddingTop="14dip"
+    android:paddingBottom="12dip">
+
+    <TextView
+        android:id="@+id/info_name"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:textSize="19sp"
+        android:textColor="@color/text_primary"
+        android:paddingBottom="5dip"
+        android:text="书名" />
+
+    <TextView
+        android:id="@+id/info_meta"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:textSize="12sp"
+        android:textColor="@color/text_secondary"
+        android:lineSpacingExtra="3dip"
+        android:paddingBottom="8dip"
+        android:text="" />
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider"
+        android:layout_marginBottom="10dip" />
+
+    <TextView
+        android:id="@+id/info_intro"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:textSize="13sp"
+        android:textColor="@color/text_secondary"
+        android:lineSpacingExtra="5dip"
+        android:maxLines="6"
+        android:ellipsize="end"
+        android:text="" />
+
+    <LinearLayout
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingTop="14dip">
+
+        <TextView
+            android:id="@+id/btn_read_first"
+            android:layout_width="0dip"
+            android:layout_height="40dip"
+            android:layout_weight="1"
+            android:textSize="15sp"
+            android:textColor="#FFFFFFFF"
+            android:background="@color/accent"
+            android:gravity="center"
+            android:layout_marginRight="5dip"
+            android:text="开始阅读" />
+
+        <TextView
+            android:id="@+id/btn_add_shelf"
+            android:layout_width="0dip"
+            android:layout_height="40dip"
+            android:layout_weight="1"
+            android:textSize="15sp"
+            android:textColor="@color/accent"
+            android:background="@color/accent_light"
+            android:gravity="center"
+            android:layout_marginLeft="5dip"
+            android:text="加入书架" />
+
+        <!-- 换源: hidden (visibility=gone) unless the book was found on more than one
+             source, so a single-source book keeps the original two-button layout. -->
+        <TextView
+            android:id="@+id/btn_switch_source"
+            android:layout_width="0dip"
+            android:layout_height="40dip"
+            android:layout_weight="1"
+            android:textSize="15sp"
+            android:textColor="@color/accent"
+            android:background="@color/accent_light"
+            android:gravity="center"
+            android:layout_marginLeft="5dip"
+            android:visibility="gone"
+            android:text="换源" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/info_toc_label"
+        style="@style/SectionHeader"
+        android:paddingLeft="0dip"
+        android:paddingRight="0dip"
+        android:text="目录" />
+
+</LinearLayout>

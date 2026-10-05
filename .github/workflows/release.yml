@@ -1,0 +1,95 @@
+# 打 tag 自动构建并发布 APK。
+#
+# 用法：
+#   1. 改 version.txt（例如 1.0.1）并提交
+#   2. git tag v1.0.1 && git push origin v1.0.1
+#   工作流会校验 tag 与 version.txt 一致，构建，发布 Release 并附上
+#   out/jianyue-v1.0.1.apk
+#   也可以在 Actions 页面手动触发（只出 artifact，不发 Release）。
+#
+# 需要的仓库 Secrets（Settings -> Secrets and variables -> Actions）：
+#   KEYSTORE_BASE64     release.keystore 的 base64（单行）
+#   KEYSTORE_PASSWORD   keystore 口令
+#   KEY_ALIAS           密钥别名（jianyue）
+#
+# 注意：run: 块里不要写非 ASCII 字符 —— runner 把步骤落成 BOM-less UTF-8，
+# Windows PowerShell 5.1 会按 GBK 读，中文会撕坏脚本（本项目踩过多次）。
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 构建需要两个 JDK：JDK 8 的 javac 编译源码，JDK 17 的 java 跑 d8。
+      # setup-java 一次装多个版本，并导出 JAVA_HOME_8_X64 / JAVA_HOME_17_X64，
+      # build-reader.ps1 优先读这两个变量。
+      - name: Check app id and logcat tag are consistent
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\tools\check-appid.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Set up JDK 8 and 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            17
+
+      - name: Check tag matches version.txt
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        run: |
+          $ver = (Get-Content version.txt -Encoding UTF8 |
+                  Where-Object { $_.Trim() -ne '' -and -not $_.Trim().StartsWith('#') } |
+                  Select-Object -First 1).Trim()
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          Write-Host "version.txt=$ver  tag=$tag"
+          if ($ver -ne $tag) {
+            Write-Error "tag and version.txt disagree - bump version.txt or retag"
+            exit 1
+          }
+
+      - name: Build APK
+        shell: powershell
+        env:
+          JY_KEYSTORE: ${{ github.workspace }}\release.keystore
+          JY_KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          JY_KEY_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          JY_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if (-not $env:KEYSTORE_B64) { Write-Error "KEYSTORE_BASE64 secret is not set"; exit 1 }
+          [IO.File]::WriteAllBytes($env:JY_KEYSTORE, [Convert]::FromBase64String($env:KEYSTORE_B64))
+          & "$env:GITHUB_WORKSPACE\build-reader.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jianyue-apk
+          path: out/jianyue-v*.apk
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $apk = Get-ChildItem out\jianyue-v*.apk | Select-Object -First 1
+          if (-not $apk) { Write-Error "no apk to publish"; exit 1 }
+          gh release create "${{ github.ref_name }}" $apk.FullName `
+            --title "${{ github.ref_name }}" --generate-notes

@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  书架 (shelf) - tab 1 of 3.
+
+  Top: a horizontal search box, so finding a book starts here rather than behind a button.
+  Middle: the shelf itself.
+  Bottom: the shared tab bar 书架 / 书源 / 本地导入 (see Ui.tabs).
+
+  Local files are imported on the 本地导入 page, so this page has no import button any more;
+  it stays a pure shelf. No cover art and no grid, by design.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical"
+    android:background="@color/bg">
+
+    <!-- search box -->
+    <LinearLayout
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@color/surface"
+        android:paddingLeft="12dip"
+        android:paddingRight="8dip"
+        android:paddingTop="8dip"
+        android:paddingBottom="8dip">
+
+        <EditText
+            android:id="@+id/shelf_search_input"
+            android:layout_width="0dip"
+            android:layout_height="36dip"
+            android:layout_weight="1"
+            android:singleLine="true"
+            android:textSize="14sp"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_hint"
+            android:background="@color/bg"
+            android:paddingLeft="10dip"
+            android:paddingRight="10dip"
+            android:hint="搜索书名" />
+
+        <!--
+          Search trigger: a magnifier icon instead of the red "搜索" pill (asked for, modelled on
+          开源阅读, whose shelf carries the magnifier rather than a worded button). It is still the
+          exact same view id and click listener, so nothing else changes; the 36dip box keeps the
+          tap target the size the pill used to be while the glyph itself is 24dip.
+        -->
+        <ImageView
+            android:id="@+id/shelf_search_go"
+            android:layout_width="36dip"
+            android:layout_height="36dip"
+            android:layout_marginLeft="6dip"
+            android:padding="6dip"
+            android:src="@drawable/ic_search"
+            android:scaleType="fitCenter"
+            android:clickable="true"
+            android:focusable="true" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
+    <FrameLayout
+        android:layout_width="fill_parent"
+        android:layout_height="0dip"
+        android:layout_weight="1">
+
+        <ListView
+            android:id="@+id/shelf_list"
+            android:layout_width="fill_parent"
+            android:layout_height="fill_parent"
+            android:divider="@color/divider"
+            android:dividerHeight="1dip"
+            android:cacheColorHint="#00000000"
+            android:scrollbarStyle="outsideOverlay" />
+
+        <TextView
+            android:id="@+id/shelf_empty"
+            android:layout_width="fill_parent"
+            android:layout_height="fill_parent"
+            android:gravity="center"
+            android:textSize="14sp"
+            android:textColor="@color/text_hint"
+            android:lineSpacingExtra="6dip"
+            android:text="书架是空的\n\n在上面输入书名，点右边的放大镜\n到「本地导入」页点 + 可以读本地书" />
+    </FrameLayout>
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
+    <!-- shared bottom tab bar: identical ids in all three page layouts; see Ui.tabs -->
+    <LinearLayout
+        android:layout_width="fill_parent"
+        android:layout_height="54dip"
+        android:orientation="horizontal"
+        android:background="@color/bar_bg">
+
+        <LinearLayout
+            android:id="@+id/tab_shelf"
+            style="@style/TabItem">
+
+            <View
+                android:id="@+id/tab_shelf_mark"
+                style="@style/TabMark" />
+
+            <ImageView
+                android:id="@+id/tab_shelf_icon"
+                android:layout_width="22dip"
+                android:layout_height="22dip"
+                android:src="@drawable/tab_shelf_on" />
+
+            <TextView
+                android:id="@+id/tab_shelf_label"
+                style="@style/TabLabel"
+                android:text="书架" />
+        </LinearLayout>
+
+        <View style="@style/TabGap" />
+
+        <LinearLayout
+            android:id="@+id/tab_source"
+            style="@style/TabItem">
+
+            <View
+                android:id="@+id/tab_source_mark"
+                style="@style/TabMark" />
+
+            <ImageView
+                android:id="@+id/tab_source_icon"
+                android:layout_width="22dip"
+                android:layout_height="22dip"
+                android:src="@drawable/tab_source_off" />
+
+            <TextView
+                android:id="@+id/tab_source_label"
+                style="@style/TabLabel"
+                android:text="书源" />
+        </LinearLayout>
+
+        <View style="@style/TabGap" />
+
+        <LinearLayout
+            android:id="@+id/tab_local"
+            style="@style/TabItem">
+
+            <View
+                android:id="@+id/tab_local_mark"
+                style="@style/TabMark" />
+
+            <ImageView
+                android:id="@+id/tab_local_icon"
+                android:layout_width="22dip"
+                android:layout_height="22dip"
+                android:src="@drawable/tab_local_off" />
+
+            <TextView
+                android:id="@+id/tab_local_label"
+                style="@style/TabLabel"
+                android:text="本地导入" />
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>
