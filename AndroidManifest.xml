@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  简阅 / JianYue reader for Android 1.0 (API level 1)
+
+  NOTE: android:targetSdkVersion does not exist in the API-1 framework and must be
+  omitted. android:label must reference a string resource, otherwise the API-1
+  launcher throws Resources$NotFoundException.
+
+  INTERNET and WRITE_EXTERNAL_STORAGE are normal permissions that must still be
+  declared. There are no runtime permissions at API 1 (that model starts at API 23).
+
+  The non-launcher activities are exported so they can also be started from the host
+  with `adb shell am start`, which is the only way to drive them for verification:
+  API 1 has no `adb shell input tap`.
+
+  android:versionCode / android:versionName are deliberately NOT declared here:
+  version.txt is the single source and build-reader.ps1 injects them into a build-time
+  copy of this file (aapt 0.2 has no version-code flag). Declaring them here makes the
+  build fail on purpose, so the two can never disagree.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.jianyue.reader">
+
+    <uses-sdk android:minSdkVersion="1" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@drawable/ic_launcher">
+
+        <!-- Host-driven test hook; inert during normal use. See TestHook. -->
+        <receiver
+            android:name=".ui.TestHook"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.jianyue.reader.TEST_EXIT" />
+            </intent-filter>
+        </receiver>
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:label="@string/app_name"
+            android:icon="@drawable/ic_launcher"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.SourcesActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+
+        <!-- 本地导入: books imported off the card, listed on their own page. -->
+        <activity
+            android:name=".ui.LocalActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+
+        <activity
+            android:name=".ui.FilePickerActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+
+        <!--
+          configChanges is what stops a rotation from destroying this activity: without it
+          an orientation change recreated the screen and an in-flight search was lost.
+          (SearchActivity additionally keeps its results in a static holder, so it recovers
+          even if it IS recreated.)
+        -->
+        <activity
+            android:name=".ui.SearchActivity"
+            android:label="@string/app_name"
+            android:configChanges="orientation|keyboardHidden"
+            android:exported="true" />
+
+        <activity
+            android:name=".ui.BookDetailActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+
+        <activity
+            android:name=".ui.ReaderActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+
+        <activity
+            android:name=".ui.HelpActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+
+
+        <!-- Host-driven site probe; not reachable from the UI. See SourceProbeActivity. -->
+        <activity
+            android:name=".ui.SourceProbeActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+        <!-- Host-driven book-source compatibility report. See SourceCheckActivity. -->
+        <activity
+            android:name=".ui.SourceCheckActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+        <!-- Host-driven rule-syntax self check. See RuleCheckActivity. -->
+        <activity
+            android:name=".ui.RuleCheckActivity"
+            android:label="@string/app_name"
+            android:exported="true" />
+    </application>
+</manifest>

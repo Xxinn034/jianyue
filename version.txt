@@ -1,0 +1,23 @@
+# 简阅 / JianYue - the only place a release version is written down.
+#
+# Format:  <versionName> [<versionCode>]
+#
+# <versionName> must be MAJOR.MINOR.PATCH. build-reader.ps1 derives the APK's
+# versionCode from it as MAJOR*10000 + MINOR*100 + PATCH, so
+#
+#     1.0.0 -> 10000     1.0.1 -> 10001     1.2.3 -> 10203
+#
+# An explicit <versionCode> may be appended to force a value (e.g. after a build
+# that was released with a hand-made code, so the next release still goes up).
+#
+# RULES
+#   - versionCode must NEVER go down: Android refuses to install an APK whose
+#     versionCode is lower than the installed one (downgrade). Keeping it
+#     strictly increasing is what makes "覆盖安装 / overwrite install" work.
+#   - Bump the version, then build, then tag the GitHub release with the same
+#     number (v1.0.0). The release asset is out/jianyue-v1.0.0.apk.
+#   - Every public APK must be signed with the SAME keystore for ever
+#     (see build-reader.ps1 $keyStore). A different key = users must uninstall
+#     first = their books/progress/sources are gone.
+#
+1.0.0

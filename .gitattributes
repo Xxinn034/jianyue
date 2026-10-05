@@ -1,0 +1,7 @@
+# 统一走 LF：仓库里的脚本本来就是 LF，Windows 的 autocrlf 会改写成 CRLF，
+# 而 .ps1 / .py / manifest 都在两个平台上被读取（本地 PowerShell 5.1 + Linux 上读文件）。
+* text=auto eol=lf
+*.exe binary
+*.dll binary
+*.jar binary
+*.png binary

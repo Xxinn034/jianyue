@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared styles. API 1 has no support library, so these are plain framework styles
+  applied through android:style on individual views.
+-->
+<resources>
+
+    <!-- list row container: white with a hairline divider, generous vertical padding -->
+    <style name="Row">
+        <item name="android:layout_width">fill_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:paddingLeft">16dip</item>
+        <item name="android:paddingRight">16dip</item>
+        <item name="android:paddingTop">13dip</item>
+        <item name="android:paddingBottom">13dip</item>
+        <item name="android:background">@color/surface</item>
+    </style>
+
+    <!-- primary line of a row: book / chapter title -->
+    <style name="RowTitle">
+        <item name="android:layout_width">fill_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:ellipsize">end</item>
+    </style>
+
+    <!-- secondary line: author / size / progress -->
+    <style name="RowSub">
+        <item name="android:layout_width">fill_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:paddingTop">3dip</item>
+    </style>
+
+    <!-- screen section header -->
+    <style name="SectionHeader">
+        <item name="android:layout_width">fill_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:paddingLeft">16dip</item>
+        <item name="android:paddingRight">16dip</item>
+        <item name="android:paddingTop">14dip</item>
+        <item name="android:paddingBottom">6dip</item>
+    </style>
+
+    <!-- bottom action bar button: flat, accent text, no framework chrome -->
+    <style name="BarButton">
+        <item name="android:layout_width">0dip</item>
+        <item name="android:layout_height">44dip</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:background">@color/bar_bg</item>
+        <item name="android:gravity">center</item>
+    </style>
+
+    <style name="BarButtonMuted">
+        <item name="android:layout_width">0dip</item>
+        <item name="android:layout_height">44dip</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:background">@color/bar_bg</item>
+        <item name="android:gravity">center</item>
+    </style>
+
+    <!-- compact action-bar button, for the action row at the TOP of a page -->
+    <style name="BarButtonSmall">
+        <item name="android:layout_width">0dip</item>
+        <item name="android:layout_height">34dip</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:background">@color/surface</item>
+        <item name="android:gravity">center</item>
+    </style>
+
+    <!-- hairline separator between two bar buttons -->
+    <style name="BarGap">
+        <item name="android:layout_width">1dip</item>
+        <item name="android:layout_height">fill_parent</item>
+        <item name="android:background">@color/divider</item>
+    </style>
+
+    <!--
+      Bottom tab bar (see Ui.tabs). One item = accent mark + icon + label, stacked; the
+      three items share the width equally so the bar reads as one control.
+
+      The mark's colour is transparent by default and painted accent for the current page:
+      API 1 has no LayerList in XML that aapt v0.2 can pour into a state list reliably, so
+      the state lives in code.
+    -->
+    <style name="TabItem">
+        <item name="android:layout_width">0dip</item>
+        <item name="android:layout_height">fill_parent</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:gravity">center_horizontal</item>
+        <item name="android:paddingTop">5dip</item>
+        <item name="android:paddingBottom">4dip</item>
+        <item name="android:background">@color/bar_bg</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
+    <style name="TabMark">
+        <item name="android:layout_width">fill_parent</item>
+        <item name="android:layout_height">2dip</item>
+        <item name="android:layout_marginBottom">4dip</item>
+        <item name="android:background">@color/bar_bg</item>
+    </style>
+
+    <style name="TabLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">2dip</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textColor">@color/text_hint</item>
+        <item name="android:singleLine">true</item>
+    </style>
+
+    <style name="TabGap">
+        <item name="android:layout_width">1dip</item>
+        <item name="android:layout_height">fill_parent</item>
+        <item name="android:background">@color/divider</item>
+    </style>
+
+    <!-- top bar title -->
+    <style name="TopTitle">
+        <item name="android:layout_width">0dip</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:textSize">17sp</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:gravity">center_vertical</item>
+    </style>
+
+</resources>

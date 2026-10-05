@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One book source in the list.
+
+  The checkbox is always laid out but is only VISIBLE in batch-edit mode, so entering and
+  leaving edit mode does not re-measure the rows (a selector change would, and on a 94 MB
+  API-1 device that is worth avoiding).
+
+  The row itself stays tappable: tapping opens the per-source menu, and tapping the checkbox
+  toggles selection. During edit mode the activity routes a row tap to selection instead.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:background="@color/surface"
+    android:minHeight="52dip"
+    android:gravity="center_vertical"
+    android:paddingLeft="10dip"
+    android:paddingRight="12dip">
+
+    <CheckBox
+        android:id="@+id/row_check"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:focusable="false"
+        android:clickable="false" />
+
+    <LinearLayout
+        android:layout_width="0dip"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:paddingTop="8dip"
+        android:paddingBottom="8dip">
+
+        <TextView
+            android:id="@+id/row_title"
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            android:textSize="15sp"
+            android:textColor="@color/text_primary"
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/row_sub"
+            android:layout_width="fill_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dip"
+            android:textSize="11sp"
+            android:textColor="@color/text_hint"
+            android:singleLine="true"
+            android:ellipsize="end" />
+    </LinearLayout>
+
+</LinearLayout>

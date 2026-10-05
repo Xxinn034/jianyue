@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Reader (阅读).
+
+  Reading model: one page of text per screen, horizontal only. There is deliberately NO
+  ScrollView: the chapter is pre-cut into screen-sized pages by Paginator, so the text
+  never scrolls vertically. Turning is by horizontal swipe or by tapping the left/right
+  thirds.
+
+  Chrome: the top strip (chapter name + 目录) and the bottom strip (prev/next chapter +
+  page counter) are HIDDEN by default and revealed by tapping the centre third. The
+  activity title is suppressed in onCreate so nothing competes with the text.
+
+  Background is set at runtime (paper / white / dark) and the status bar is hidden for
+  the whole activity, so a dark background is fully immersive rather than surrounded by a
+  bright status bar.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical"
+    android:id="@+id/read_root"
+    android:background="@color/reading_bg">
+
+    <!-- ===== top strip: hidden until the centre is tapped ===== -->
+    <LinearLayout
+        android:id="@+id/read_top_bar"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:visibility="gone"
+        android:paddingLeft="12dip"
+        android:paddingRight="12dip"
+        android:paddingTop="7dip"
+        android:paddingBottom="6dip">
+
+        <TextView
+            android:id="@+id/read_title"
+            android:layout_width="0dip"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="13sp"
+            android:textColor="@color/text_secondary"
+            android:singleLine="true"
+            android:ellipsize="middle"
+            android:text="" />
+
+        <TextView
+            android:id="@+id/read_btn_toc"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="@color/accent"
+            android:paddingLeft="12dip"
+            android:text="目录" />
+    </LinearLayout>
+
+    <!-- ===== the page itself ===== -->
+    <FrameLayout
+        android:id="@+id/read_page_area"
+        android:layout_width="fill_parent"
+        android:layout_height="0dip"
+        android:layout_weight="1">
+
+        <TextView
+            android:id="@+id/read_text"
+            android:layout_width="fill_parent"
+            android:layout_height="fill_parent"
+            android:paddingLeft="18dip"
+            android:paddingRight="18dip"
+            android:paddingTop="6dip"
+            android:paddingBottom="6dip"
+            android:textSize="18sp"
+            android:textColor="@color/reading_text"
+            android:lineSpacingExtra="@dimen/reader_line_spacing"
+            android:text="" />
+
+        <!--
+          Touch overlay, three EQUAL thirds:
+            left   -> previous page
+            centre -> show/hide the top and bottom strips
+            right  -> next page
+          There is no swipe handling; taps only.
+        -->
+        <LinearLayout
+            android:layout_width="fill_parent"
+            android:layout_height="fill_parent"
+            android:orientation="horizontal">
+
+            <View
+                android:id="@+id/read_zone_prev"
+                android:layout_width="0dip"
+                android:layout_height="fill_parent"
+                android:layout_weight="1" />
+
+            <View
+                android:id="@+id/read_zone_menu"
+                android:layout_width="0dip"
+                android:layout_height="fill_parent"
+                android:layout_weight="1" />
+
+            <View
+                android:id="@+id/read_zone_next"
+                android:layout_width="0dip"
+                android:layout_height="fill_parent"
+                android:layout_weight="1" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ===== bottom strip: hidden until the centre is tapped ===== -->
+    <LinearLayout
+        android:id="@+id/read_bottom_bar"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:visibility="gone"
+        android:paddingLeft="12dip"
+        android:paddingRight="12dip"
+        android:paddingTop="6dip"
+        android:paddingBottom="8dip">
+
+        <TextView
+            android:id="@+id/read_prev_chapter"
+            android:layout_width="0dip"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="13sp"
+            android:textColor="@color/text_secondary"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:text="上一章" />
+
+        <TextView
+            android:id="@+id/read_progress"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="@color/text_hint"
+            android:paddingLeft="8dip"
+            android:paddingRight="8dip"
+            android:text="" />
+
+        <TextView
+            android:id="@+id/read_next_chapter"
+            android:layout_width="0dip"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="13sp"
+            android:textColor="@color/text_secondary"
+            android:singleLine="true"
+            android:ellipsize="start"
+            android:gravity="right"
+            android:text="下一章" />
+    </LinearLayout>
+
+</LinearLayout>

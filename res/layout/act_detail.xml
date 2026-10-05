@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Book detail + table of contents in one screen: the 阅读 pattern, a header block with
+  the book info and the chapter list below it. Built as a single ListView with a header
+  view so the whole thing scrolls together without needing two nested scrollers.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical"
+    android:background="@color/bg">
+
+    <LinearLayout
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="@color/surface"
+        android:paddingLeft="16dip"
+        android:paddingRight="10dip"
+        android:paddingTop="10dip"
+        android:paddingBottom="10dip">
+
+        <TextView
+            android:id="@+id/detail_title"
+            style="@style/TopTitle"
+            android:gravity="left|center_vertical"
+            android:text="书籍" />
+
+        <TextView
+            android:id="@+id/detail_toc_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="@color/text_hint"
+            android:gravity="center_vertical"
+            android:text="" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
+    <ListView
+        android:id="@+id/detail_list"
+        android:layout_width="fill_parent"
+        android:layout_height="0dip"
+        android:layout_weight="1"
+        android:divider="@color/divider"
+        android:dividerHeight="1dip"
+        android:cacheColorHint="#00000000" />
+
+</LinearLayout>

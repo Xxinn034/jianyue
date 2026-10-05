@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  书源 (book sources) - tab 2 of 3.
+
+  Structure:
+    - title row: name + count, and the 批量 button that enters batch-edit mode
+    - action row: 粘贴导入 / 从文件导入 / 格式说明, moved UP from the bottom of the screen so
+      that the bottom holds nothing but the shared tab bar (the bar has to look the same on
+      all three pages)
+    - batch bar: hidden normally; in edit mode it offers 全选/全不选 and 删除
+    - list
+    - bottom: the shared tab bar 书架 / 书源 / 本地导入 (see Ui.tabs)
+
+  The action row and the batch bar are separate so that entering edit mode does not move the
+  import buttons under the user's finger.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    android:orientation="vertical"
+    android:background="@color/bg">
+
+    <!-- title row -->
+    <LinearLayout
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingLeft="14dip"
+        android:paddingRight="8dip"
+        android:paddingTop="9dip"
+        android:paddingBottom="9dip">
+
+        <TextView
+            android:id="@+id/src_title"
+            android:layout_width="0dip"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="15sp"
+            android:textColor="@color/text_primary"
+            android:text="书源" />
+
+        <TextView
+            android:id="@+id/src_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="10dip"
+            android:textSize="12sp"
+            android:textColor="@color/text_hint"
+            android:text="" />
+
+        <TextView
+            android:id="@+id/btn_edit"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="10dip"
+            android:paddingRight="10dip"
+            android:paddingTop="4dip"
+            android:paddingBottom="4dip"
+            android:textSize="13sp"
+            android:textColor="@color/accent"
+            android:text="批量" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
+    <!-- action row (used to live at the bottom of this screen) -->
+    <LinearLayout
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="@color/surface">
+
+        <TextView
+            android:id="@+id/btn_paste"
+            style="@style/BarButtonSmall"
+            android:text="粘贴导入" />
+
+        <View style="@style/BarGap" />
+
+        <TextView
+            android:id="@+id/btn_file"
+            style="@style/BarButtonSmall"
+            android:text="从文件导入" />
+
+        <View style="@style/BarGap" />
+
+        <TextView
+            android:id="@+id/btn_src_help"
+            style="@style/BarButtonSmall"
+            android:textColor="@color/text_secondary"
+            android:text="格式说明" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
+    <!-- batch-edit bar: only visible in edit mode -->
+    <LinearLayout
+        android:id="@+id/src_batch_bar"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:visibility="gone"
+        android:background="@color/accent_light"
+        android:gravity="center_vertical"
+        android:paddingLeft="14dip"
+        android:paddingRight="8dip"
+        android:paddingTop="7dip"
+        android:paddingBottom="7dip">
+
+        <TextView
+            android:id="@+id/src_sel_info"
+            android:layout_width="0dip"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="13sp"
+            android:textColor="@color/text_secondary"
+            android:text="已选 0 个" />
+
+        <TextView
+            android:id="@+id/btn_select_all"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="10dip"
+            android:paddingRight="10dip"
+            android:paddingTop="4dip"
+            android:paddingBottom="4dip"
+            android:textSize="13sp"
+            android:textColor="@color/accent"
+            android:text="全选" />
+
+        <TextView
+            android:id="@+id/btn_delete"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="4dip"
+            android:paddingLeft="10dip"
+            android:paddingRight="10dip"
+            android:paddingTop="4dip"
+            android:paddingBottom="4dip"
+            android:textSize="13sp"
+            android:textColor="#FFC62828"
+            android:text="删除" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="fill_parent"
+        android:layout_height="0dip"
+        android:layout_weight="1">
+
+        <ListView
+            android:id="@+id/src_list"
+            android:layout_width="fill_parent"
+            android:layout_height="fill_parent"
+            android:divider="@color/divider"
+            android:dividerHeight="1dip"
+            android:cacheColorHint="#00000000" />
+
+        <TextView
+            android:id="@+id/src_empty"
+            android:layout_width="fill_parent"
+            android:layout_height="fill_parent"
+            android:gravity="center"
+            android:paddingLeft="20dip"
+            android:paddingRight="20dip"
+            android:textSize="14sp"
+            android:textColor="@color/text_hint"
+            android:lineSpacingExtra="6dip"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
+    <!-- shared bottom tab bar: identical ids in all three page layouts; see Ui.tabs -->
+    <LinearLayout
+        android:layout_width="fill_parent"
+        android:layout_height="54dip"
+        android:orientation="horizontal"
+        android:background="@color/bar_bg">
+
+        <LinearLayout
+            android:id="@+id/tab_shelf"
+            style="@style/TabItem">
+
+            <View
+                android:id="@+id/tab_shelf_mark"
+                style="@style/TabMark" />
+
+            <ImageView
+                android:id="@+id/tab_shelf_icon"
+                android:layout_width="22dip"
+                android:layout_height="22dip"
+                android:src="@drawable/tab_shelf_off" />
+
+            <TextView
+                android:id="@+id/tab_shelf_label"
+                style="@style/TabLabel"
+                android:text="书架" />
+        </LinearLayout>
+
+        <View style="@style/TabGap" />
+
+        <LinearLayout
+            android:id="@+id/tab_source"
+            style="@style/TabItem">
+
+            <View
+                android:id="@+id/tab_source_mark"
+                style="@style/TabMark" />
+
+            <ImageView
+                android:id="@+id/tab_source_icon"
+                android:layout_width="22dip"
+                android:layout_height="22dip"
+                android:src="@drawable/tab_source_on" />
+
+            <TextView
+                android:id="@+id/tab_source_label"
+                style="@style/TabLabel"
+                android:text="书源" />
+        </LinearLayout>
+
+        <View style="@style/TabGap" />
+
+        <LinearLayout
+            android:id="@+id/tab_local"
+            style="@style/TabItem">
+
+            <View
+                android:id="@+id/tab_local_mark"
+                style="@style/TabMark" />
+
+            <ImageView
+                android:id="@+id/tab_local_icon"
+                android:layout_width="22dip"
+                android:layout_height="22dip"
+                android:src="@drawable/tab_local_off" />
+
+            <TextView
+                android:id="@+id/tab_local_label"
+                style="@style/TabLabel"
+                android:text="本地导入" />
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

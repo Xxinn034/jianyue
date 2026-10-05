@@ -1,0 +1,27 @@
+# Build output
+out/
+tools-tmp/
+_backup-before-ui-changes/
+
+# Signing material: never commit. secrets.local.ps1 holds the keystore path and passwords.
+secrets.local.ps1
+*.keystore
+*.jks
+*.p12
+
+# Local device / probe output
+tools/*.log
+tools/*-run*.txt
+tools/emu-*.log
+tools/api16/
+tools/api37/
+tools/preview/
+tools/probe-reader/
+local-test/
+*.apk
+
+# Android/Gradle leftovers (there is no Gradle build here, but keep them out anyway)
+.gradle/
+local.properties
+*.iml
+.idea/

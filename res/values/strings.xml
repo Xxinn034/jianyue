@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Strings.
+
+  android:label MUST reference a string resource: a literal label makes the API-1 launcher
+  throw Resources$NotFoundException. This is the app's display name; the icon bitmap also
+  carries the characters, but the launcher label is what is guaranteed to be legible.
+-->
+<resources>
+    <string name="app_name">简阅</string>
+</resources>
