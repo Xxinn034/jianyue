@@ -19,6 +19,7 @@ import java.util.List;
 import com.jianyue.reader.model.Books;
 import com.jianyue.reader.model.LocalStore;
 import com.jianyue.reader.model.ProgressStore;
+import com.jianyue.reader.util.Compat;
 
 /**
  * 书架 (shelf) - tab 1 of 3.
@@ -43,6 +44,8 @@ public class MainActivity extends Activity {
     private ListView list;
     private TextView empty;
     private BookRowAdapter adapter;
+    /** importBook that is waiting for the API 23+ storage-permission dialog. */
+    private String pendingImport;
 
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -96,8 +99,16 @@ public class MainActivity extends Activity {
         // Host-driven import: `-e importBook /sdcard/book.txt` runs exactly the same code
         // path as the + button on the 本地导入 page. API 1 has no `adb shell input tap`, so
         // this is the only way to verify importing from the host.
+        //
+        // From API 23 on the SD card is behind a runtime permission; when it has not been
+        // granted yet the import is parked and replayed from onRequestPermissionsResult.
         if (getIntent().hasExtra("importBook")) {
-            importLocalFile(getIntent().getStringExtra("importBook"));
+            pendingImport = getIntent().getStringExtra("importBook");
+            if (Compat.ensureStorage(this)) {
+                String path = pendingImport;
+                pendingImport = null;
+                importLocalFile(path);
+            }
         }
 
         // Host-driven layout check: API 1 has no screencap, so the sheet cannot be
@@ -113,6 +124,26 @@ public class MainActivity extends Activity {
                     dumpLayout(rootView);
                 }
             }, 800L);
+        }
+    }
+
+    /**
+     * Replays the import that was parked while the API 23+ storage dialog was up.
+     *
+     * Deliberately without @Override and without calling super: the API-1 android.jar
+     * this project compiles against has neither the method nor anything to call, and on
+     * API 23+ the framework dispatches here by signature. Do not "tidy" this up.
+     */
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode != Compat.REQ_STORAGE || pendingImport == null) {
+            return;
+        }
+        String path = pendingImport;
+        pendingImport = null;
+        if (Compat.hasStorage(this)) {
+            importLocalFile(path);
+        } else {
+            toast("没有存储权限，无法读取 " + path);
         }
     }
 
