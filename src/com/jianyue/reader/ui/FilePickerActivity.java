@@ -17,6 +17,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.jianyue.reader.util.Compat;
 import com.jianyue.reader.util.FileUtils;
 
 /**
@@ -113,7 +114,28 @@ public class FilePickerActivity extends Activity {
             }
         });
 
-        showRoots();
+        // From API 23 the SD card sits behind a runtime permission. Ask for it before
+        // listing anything; onRequestPermissionsResult fills the list once the user answers.
+        if (Compat.ensureStorage(this)) {
+            showRoots();
+        }
+    }
+
+    /**
+     * Lists the roots once the user answered the API 23+ storage dialog.
+     *
+     * Deliberately without @Override and without calling super: the API-1 android.jar
+     * this project compiles against has neither the method nor anything to call, and on
+     * API 23+ the framework dispatches here by signature. Do not "tidy" this up.
+     */
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == Compat.REQ_STORAGE) {
+            if (Compat.hasStorage(this)) {
+                showRoots();
+            } else {
+                toast("没有存储权限，看不到存储卡上的文件");
+            }
+        }
     }
 
     private void showRoots() {

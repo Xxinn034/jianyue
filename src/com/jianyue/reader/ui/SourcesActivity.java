@@ -25,6 +25,7 @@ import java.util.Set;
 import com.jianyue.reader.R;
 import com.jianyue.reader.model.BookSource;
 import com.jianyue.reader.model.SourceStore;
+import com.jianyue.reader.util.Compat;
 
 /**
  * 书源管理 (book-source management).
@@ -69,6 +70,8 @@ public class SourcesActivity extends Activity {
     private TextView selectAllButton;
     private TextView deleteButton;
     private SourceAdapter adapter;
+    /** importPath that is waiting for the API 23+ storage-permission dialog. */
+    private String pendingImportPath;
 
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -171,15 +174,47 @@ public class SourcesActivity extends Activity {
         // API 1 has no `adb shell input tap`, so pasting JSON or walking the file picker
         // cannot be driven from the host (a dialog cannot be dismissed either). This runs
         // the exact same SourceStore.importFile path the UI uses.
+        //
+        // From API 23 on the SD card is behind a runtime permission; if it has not been
+        // granted the path is parked and replayed from onRequestPermissionsResult.
         final String importPath = getIntent().getStringExtra("importPath");
         if (importPath != null && importPath.length() > 0) {
-            File f = new File(importPath);
-            Log.i(TAG, "importPath requested: " + importPath + " exists=" + f.isFile());
-            SourceStore.ImportResult r = store.importFile(f);
-            Log.i(TAG, "importPath result: added=" + r.added + " updated=" + r.skipped
-                    + " failed=" + r.failed + " error=" + r.error);
-            reload();
-            count.setText("导入 " + r.added + " 个，共 " + store.size() + " 个");
+            pendingImportPath = importPath;
+            if (Compat.ensureStorage(this)) {
+                pendingImportPath = null;
+                importPathNow(importPath);
+            }
+        }
+    }
+
+    /** The host-driven import body; also replayed after the permission dialog. */
+    private void importPathNow(String importPath) {
+        File f = new File(importPath);
+        Log.i(TAG, "importPath requested: " + importPath + " exists=" + f.isFile());
+        SourceStore.ImportResult r = store.importFile(f);
+        Log.i(TAG, "importPath result: added=" + r.added + " updated=" + r.skipped
+                + " failed=" + r.failed + " error=" + r.error);
+        reload();
+        count.setText("导入 " + r.added + " 个，共 " + store.size() + " 个");
+    }
+
+    /**
+     * Finishes an import that was parked while the API 23+ storage dialog was up.
+     *
+     * Deliberately without @Override and without calling super: the API-1 android.jar
+     * this project compiles against has neither the method nor anything to call, and on
+     * API 23+ the framework dispatches here by signature. Do not "tidy" this up.
+     */
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode != Compat.REQ_STORAGE || pendingImportPath == null) {
+            return;
+        }
+        String path = pendingImportPath;
+        pendingImportPath = null;
+        if (Compat.hasStorage(this)) {
+            importPathNow(path);
+        } else {
+            toast("没有存储权限，无法读取 " + path);
         }
     }
 

@@ -35,6 +35,13 @@ $Proj = (Resolve-Path -LiteralPath $Proj).Path
 $sdkDir = "$Proj\tools\sdk"
 
 $out = "$Proj\out"
+# The APK's targetSdkVersion, stamped into the compiled manifest by tools\axml-patch.ps1.
+# 28 is measured, not guessed: < 24 is refused at install on Android 14+, < 28 makes
+# Android 17 show the "built for an older version of Android" dialog, and >= 29 forces
+# scoped storage, which breaks reading /sdcard for book-source and local-book import.
+# 28 also needs usesCleartextTraffic (Android 9+ blocks plain HTTP from targetSdk 28 on).
+$targetSdk = 28
+$attrTargetSdk = 0x01010270
 function Step($n, $msg) { Write-Output ""; Write-Output ("########## " + $n + " : " + $msg + " ##########") }
 function Fail($msg) { Write-Output ("!! " + $msg); exit 1 }
 
@@ -135,7 +142,7 @@ Remove-Item $out -Recurse -Force -EA SilentlyContinue
 New-Item -ItemType Directory "$out\gen","$out\classes","$out\dex" -Force | Out-Null
 
 # ------------------------------------------------ 1. resources + R.java
-Step "1/7" "aapt v0.2 packages resources and generates R.java"
+Step "1/8" "aapt v0.2 packages resources and generates R.java"
 # Inject versionCode/versionName into a build-time copy of the manifest.
 $mfText = [System.IO.File]::ReadAllText("$Proj\AndroidManifest.xml", (New-Object System.Text.UTF8Encoding($false)))
 if ($mfText -match 'android:versionCode\s*=') {
@@ -156,12 +163,12 @@ if (-not (Test-Path -LiteralPath "$out\resources.apk")) { Fail "aapt failed" }
 $rJava = Get-ChildItem "$out\gen" -Recurse -Filter 'R.java' | Select-Object -First 1
 Write-Output ("resources.apk = {0:N0} bytes" -f (Get-Item "$out\resources.apk").Length)
 
-Step "2/7" "javac - R.java"
+Step "2/8" "javac - R.java"
 & "$jdk8\bin\javac.exe" -nowarn -source 8 -target 8 -bootclasspath $androidJar `
     -encoding UTF-8 -d "$out\classes" $rJava.FullName 2>&1 | Select-Object -First 10
 
 # ------------------------------------------------ 2. sources
-Step "3/7" "javac - reader sources (bootclasspath = API-1 android.jar)"
+Step "3/8" "javac - reader sources (bootclasspath = API-1 android.jar)"
 $src = Get-ChildItem "$Proj\src" -Recurse -Filter '*.java' | Select-Object -ExpandProperty FullName
 Write-Output ("source files: " + $src.Count)
 $cp = "$androidJar;$rhino;$out\classes"
@@ -173,7 +180,7 @@ if (-not (Test-Path -LiteralPath "$out\classes\com\jianyue\reader\ui\MainActivit
 Write-Output ("javac OK - {0} class files" -f (Get-ChildItem "$out\classes" -Recurse -Filter '*.class').Count)
 
 # ------------------------------------------------ 3. dex
-Step "4/7" "d8 --min-api 1 (sources + Rhino)"
+Step "4/8" "d8 --min-api 1 (sources + Rhino)"
 $classFiles = Get-ChildItem "$out\classes" -Recurse -Filter '*.class' | Select-Object -ExpandProperty FullName
 $inputs = @() + $classFiles + @($rhino)
 $d8Args = @('-Xmx1536M','-cp', $d8Jar, 'com.android.tools.r8.D8',
@@ -185,7 +192,7 @@ Write-Output ("classes.dex: {0:N0} bytes  version={1}" -f $dexBytes.Length,
     [System.Text.Encoding]::ASCII.GetString($dexBytes,4,3))
 
 # ------------------------------------------------ 4. assemble
-Step "5/7" "inject dex"
+Step "5/8" "inject dex"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Copy-Item "$out\resources.apk" "$out\app.apk" -Force
 $zip = [System.IO.Compression.ZipFile]::Open("$out\app.apk", 'Update')
@@ -194,13 +201,22 @@ if ($existing) { $zip.Entries.Remove($existing) }
 [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, "$out\dex\classes.dex", 'classes.dex', 'Optimal') | Out-Null
 $zip.Dispose()
 
-Step "6/7" "zipalign + sign"
+Step "6/8" "stamp targetSdkVersion + usesCleartextTraffic into the manifest"
+# aapt v0.2 cannot express either attribute (see tools\axml-patch.ps1), and without
+# targetSdk >= 24 Android 14+ refuses to install the APK at all. The patch runs after the
+# dex is in and before signing, and must not invalidate anything else in the APK.
+& (Join-Path $Proj 'tools\axml-patch.ps1') -Apk "$out\app.apk" -Out "$out\app-target.apk" `
+    -TargetSdk $targetSdk
+if (-not (Test-Path -LiteralPath "$out\app-target.apk")) { Fail "manifest patch failed" }
+Move-Item -Force "$out\app-target.apk" "$out\app.apk"
+
+Step "7/8" "zipalign + sign"
 & $zipAlign -f 4 "$out\app.apk" "$out\app-aligned.apk" 2>&1 | Select-Object -First 3
 & $apkSigner sign --ks $keyStore --ks-type JKS --ks-pass ("pass:" + $ksPass) `
     --key-pass ("pass:" + $keyPass) --ks-key-alias $ksAlias --v1-signing-enabled true `
     --out "$out\reader.apk" "$out\app-aligned.apk" 2>&1 | Select-Object -First 6
 
-Step "7/7" "verify"
+Step "8/8" "verify"
 if (-not (Test-Path -LiteralPath "$out\reader.apk")) { Fail "SIGN FAILED" }
 $badging = & $aapt dump badging "$out\reader.apk" 2>&1
 $badging | Select-Object -First 3
@@ -210,6 +226,15 @@ if (-not (($badging | Select-Object -First 1) -match ("versionCode='" + $verCode
 if (-not (($badging | Select-Object -First 1) -match ("versionName='" + [regex]::Escape($verName) + "'"))) {
     Fail ("built APK does not carry versionName " + $verName)
 }
+# The manifest patch is the one step whose failure Android only reports at install time on
+# a new device, so assert it here: the compiled manifest must carry the attribute id with
+# the expected value (aapt v0.2 cannot name the attribute, but it prints the id and value).
+$tree = & $aapt dump xmltree "$out\reader.apk" AndroidManifest.xml 2>&1
+$want = ("0x" + $attrTargetSdk.ToString('x8') + ")=(type 0x10)0x" + ('{0:x}' -f $targetSdk))
+if (-not ($tree | Select-String -Pattern ([regex]::Escape($want)))) {
+    Fail ("built APK does not carry targetSdkVersion " + $targetSdk + " (expected " + $want + ")")
+}
+Write-Output ("targetSdkVersion : " + $targetSdk + " (manifest attribute stamped)")
 # Signer fingerprint: the one line that proves a build (local or CI) can overwrite-install
 # over the previous one. It must be identical for every release, for ever.
 & $apkSigner verify --print-certs "$out\reader.apk" 2>&1 |
