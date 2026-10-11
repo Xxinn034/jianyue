@@ -61,11 +61,13 @@ public class SourceCheckActivity extends Activity {
             public void run() {
                 List<BookSource> list = BookSource.parseFile(json);
                 Log.i(TAG, "check: parsed=" + list.size() + " sources");
+                resetReport();
                 int supported = 0;
                 for (int i = 0; i < list.size(); i++) {
                     BookSource s = list.get(i);
                     ruleCount = 0;
                     badRuleCount = 0;
+                    boolean typeOk = s.isSupported();
                     Log.i(TAG, "check: [" + i + "] " + s.name
                             + " type=" + s.typeName()
                             + " supported=" + (s.isSupported() ? "yes" : "no"));
@@ -88,19 +90,54 @@ public class SourceCheckActivity extends Activity {
                     checkRules(s.name, "bookInfo", s.bookInfoRules);
                     checkRules(s.name, "toc", s.tocRules);
                     checkRules(s.name, "content", s.contentRules);
-                    boolean ok = s.isSupported() && badRuleCount == 0;
+                    boolean ok = typeOk && badRuleCount == 0;
                     if (ok) {
                         supported++;
                     }
                     Log.i(TAG, "check:   -> rules=" + ruleCount
                             + " unsupported=" + badRuleCount
                             + " verdict=" + (ok ? "COMPATIBLE" : "PARTIAL"));
+                    report("VERDICT\t" + i + "\t" + (ok ? "COMPATIBLE" : "PARTIAL")
+                            + "\trules=" + ruleCount + "\tunsupported=" + badRuleCount);
                 }
                 Log.i(TAG, "check: SUMMARY sources=" + list.size()
                         + " fullyCompatible=" + supported);
+                report("SUMMARY\tsources=" + list.size()
+                        + "\tfullyCompatible=" + supported);
+                report("END");
             }
         });
         t.start();
+    }
+
+    /** Where the machine-readable report is written, so logcat loss cannot hide it. */
+    static final String REPORT_PATH = "/sdcard/source-check.txt";
+
+    private static void resetReport() {
+        java.io.FileOutputStream out = null;
+        try {
+            out = new java.io.FileOutputStream(REPORT_PATH, false);
+            out.write("".getBytes("UTF-8"));
+            out.flush();
+        } catch (Throwable t) {
+            Log.i(TAG, "check: cannot reset report: " + t.getMessage());
+        } finally {
+            try { if (out != null) out.close(); } catch (Throwable ignored) { }
+        }
+    }
+
+    /** Append one machine-readable line to the report on /sdcard. */
+    static synchronized void report(String line) {
+        java.io.FileOutputStream out = null;
+        try {
+            out = new java.io.FileOutputStream(REPORT_PATH, true);
+            out.write((line + "\n").getBytes("UTF-8"));
+            out.flush();
+        } catch (Throwable t) {
+            Log.i(TAG, "check: cannot write report: " + t.getMessage());
+        } finally {
+            try { if (out != null) out.close(); } catch (Throwable ignored) { }
+        }
     }
 
     private void checkRules(String src, String group, BookSource.Rules r) {
@@ -132,9 +169,20 @@ public class SourceCheckActivity extends Activity {
         }
         ruleCount++;
         String reason = unsupportedReason(rule);
+        if (reason == null && rule.indexOf(",{") > 0) {
+            // ", {json}" request options: method/body/headers/charset are honoured, but
+            // these need a browser or a JS request pipeline.
+            com.jianyue.reader.net.UrlOptions uo = com.jianyue.reader.net.UrlOptions.parse(rule);
+            if (uo.unsupported != null) {
+                reason = uo.unsupported;
+            } else if (rule.indexOf("\"type\"") >= 0) {
+                reason = "request option type= (hex response body) not implemented";
+            }
+        }
         if (reason != null) {
             badRuleCount++;
             Log.i(TAG, "check:   UNSUPPORTED " + field + ": " + rule + "  (" + reason + ")");
+            report("UNSUPPORTED\t" + src + "\t" + field + "\t" + reason + "\t" + rule);
         }
     }
 
@@ -151,21 +199,27 @@ public class SourceCheckActivity extends Activity {
             return null;
         }
 
-        // JS rules: Rhino covers most of it, but these constructs need host objects or Java
-        // access that the sandboxed interpreter does not expose.
+        // JS rules: Rhino covers most of it, and since the 2026-10 engine work the host
+        // objects a 阅读 source expects are provided: java.* (base64/md5/time/ajax/put/get/
+        // getString...), Packages.* / JavaImporter (arbitrary Java, with java.io.File and
+        // Runtime blocked), source.*, book.*, baseUrl, result, cookie (read-only).
+        // What is still missing is listed below instead.
         if (r.startsWith("@js:") || r.startsWith("<js>") || r.startsWith("{{js")) {
             String body = r;
             if (r.startsWith("@js:")) {
                 body = r.substring(4);
             }
-            if (body.indexOf("java.") >= 0 || body.indexOf("Packages.") >= 0
-                    || body.indexOf("importClass") >= 0 || body.indexOf("importPackage") >= 0) {
-                return "JS uses Java class access, which is not exposed";
+            if (body.indexOf("webView") >= 0 || body.indexOf("java.webView") >= 0) {
+                return "JS needs a WebView, which API 1 cannot provide";
             }
-            if (body.indexOf("source.") >= 0 || body.indexOf("book.") >= 0
-                    || body.indexOf("baseUrl") >= 0 || body.indexOf("result") >= 0
-                    || body.indexOf("cookie") >= 0 || body.indexOf("cache") >= 0) {
-                return null;   // these variables are provided
+            if (body.indexOf("cache.") >= 0 || body.indexOf("cache.put") >= 0) {
+                return "JS cache.* host object not provided";
+            }
+            if (body.indexOf("getLoginInfo") >= 0 || body.indexOf("getCookie") >= 0) {
+                return "JS login/cookie host API not provided";
+            }
+            if (body.indexOf("queryTTF") >= 0 || body.indexOf("replaceFont") >= 0) {
+                return "JS font de-obfuscation not implemented";
             }
             return null;
         }
@@ -191,17 +245,10 @@ public class SourceCheckActivity extends Activity {
             return null;
         }
 
-        // JSONPath: only the common forms are implemented.
+        // JSONPath: $.. recursive descent and [*] are implemented; filters and functions are not.
         if (r.startsWith("$")) {
             if (r.indexOf("?(") >= 0) {
                 return "JSONPath filter expression not implemented";
-            }
-            if (r.indexOf("..") >= 0 && r.indexOf("..") == r.indexOf("..")) {
-                // ".." recursive descent: supported for simple leaf names only
-                String after = r.substring(r.indexOf("..") + 2);
-                if (after.indexOf('.') >= 0 || after.indexOf('[') >= 0) {
-                    return "JSONPath recursive descent supports a bare leaf name only";
-                }
             }
             if (r.indexOf("length()") >= 0) {
                 return "JSONPath function not implemented";
@@ -209,11 +256,14 @@ public class SourceCheckActivity extends Activity {
             return null;
         }
 
-        // CSS: the selector engine handles tag/class/id/attribute and simple combinators.
+        // CSS: the selector engine handles tag/class/id/attribute, index suffixes (.0/.-1),
+        // exclusion lists (!0:1) and multi-class names (class.a.b).
         if (r.startsWith("class.") || r.startsWith("id.") || r.startsWith("tag.")
                 || r.startsWith(".") || r.startsWith("#")) {
             if (r.indexOf(":eq(") >= 0 || r.indexOf(":gt(") >= 0 || r.indexOf(":lt(") >= 0) {
-                return "CSS index pseudo-class not implemented";
+                // 阅读 itself has no :eq/:gt/:lt either (jsoup 1.14 has no parser branch for
+                // them), so a source using them is broken upstream too.
+                return "CSS index pseudo-class not implemented (also unsupported by 阅读)";
             }
             if (r.indexOf(":contains(") >= 0) {
                 return "CSS :contains not implemented";

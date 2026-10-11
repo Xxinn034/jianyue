@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tab switch, page coming in from the right: 书架 -> 书源 -> 本地导入.
+  Paired with tab_out_left (the page being left goes out to the left) and used both by the
+  window animation style (res/values/styles.xml, style TabAnim) and by the one-shot
+  override Ui.switchTo applies on API 5+.
+
+  Only <translate>/<alpha> are used: those elements (and % deltas) exist at API 1, which is
+  what keeps this file compilable and loadable on every platform the app runs on.
+-->
+<translate xmlns:android="http://schemas.android.com/apk/res/android"
+    android:fromXDelta="100%"
+    android:toXDelta="0"
+    android:duration="220"
+    android:interpolator="@android:anim/decelerate_interpolator" />

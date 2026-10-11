@@ -20,62 +20,103 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 
 import com.jianyue.reader.R;
 import com.jianyue.reader.engine.Engine;
+import com.jianyue.reader.engine.SearchJob;
 import com.jianyue.reader.model.BookSource;
 import com.jianyue.reader.model.Books;
+import com.jianyue.reader.model.SourceHealth;
 import com.jianyue.reader.model.SourceStore;
 import com.jianyue.reader.model.SourceSwitcher;
 
 /**
  * 搜索 (search).
  *
- * Sources are queried in PARALLEL by {@link Engine#searchAll}. That is the main speed fix:
- * a serial loop made the total wait equal the SUM of every site's latency, while almost all
- * of that time is spent blocked on the network rather than on the CPU.
+ * HOW A SEARCH RUNS NOW
+ * ---------------------
+ * Sources are handed to {@link SearchJob}, which keeps a wide set of requests in flight,
+ * skips hosts that already failed in this process, and reports each source the moment it
+ * finishes. This screen shows those reports as they arrive:
+ *
+ *   - the first hits appear in about one round trip instead of after the whole list;
+ *   - the status line counts progress ("搜索中 37/231 · 找到 12 本 · 跳过 9");
+ *   - the search button turns into 停止, and stopping keeps everything found so far.
+ *
+ * That last point is the real answer to "200 sources take minutes": the sources are ordered
+ * by {@link SourceHealth} so the sites that answered last time are searched first, which
+ * means stopping after a few seconds gives the same books as waiting for the tail of dead
+ * sites to time out.
  *
  * MERGING (同名书合并)
  * -------------------
- * The same novel is usually found on five or six sources at once, which used to produce one
- * identical-looking row per source. Results are now grouped by a normalised title
- * ({@link Engine#normalizeTitle}), one row per book, with the source name shown in the
- * subtitle and the candidate sources kept in {@link SourceSwitcher} so the detail and reader
- * screens can offer 换源.
- *
- * Which source a group opens on is chosen at random, because there is no way to know up
- * front which one is readable - the user switches if the first pick is bad.
+ * The same novel is usually found on several sources, which used to produce one identical
+ * row per source. Results are grouped by normalised title ({@link Engine#mergeKey}) as they
+ * stream in, one row per book, with the source shown in the subtitle and the candidates kept
+ * in {@link SourceSwitcher} for 换源.
  *
  * Rotation safety
  * ---------------
- * A search used to be lost whenever the device rotated. Two things caused it:
- *   - the activity was destroyed and recreated, taking the state (a plain field plus a
- *     running thread) with it, while the worker kept posting into a dead handler;
- *   - the worker thread was never told to stop, so it also kept the dead activity alive.
- *
- * The fix has two parts:
- *   - the manifest declares android:configChanges for orientation, so this activity is NOT
- *     recreated on rotation and the search is simply never interrupted;
- *   - the search state lives in a static holder, so even if the activity is recreated
- *     (process death, or a configuration change the manifest does not cover) the results and
- *     the running flag survive and the new instance re-attaches to them.
+ * The search state lives in a static holder, so an activity restart does not lose an
+ * in-flight search, and the manifest declares configChanges for orientation anyway.
  */
 public class SearchActivity extends Activity {
 
     private static final String TAG = "JianYue";
 
+    /** Repaint the list at most this often while results stream in. */
+    private static final long UI_THROTTLE_MS = 250L;
+
     /**
-     * Search state that deliberately outlives the activity, so a restart does not lose an
-     * in-flight search. Only touched from the UI thread, so no synchronisation is needed.
+     * Search state that deliberately outlives the activity. Touched from the UI thread and
+     * (for the counters only) from one worker thread, so the mutable fields are volatile.
      */
     private static final class State {
-        static boolean running;
+        static volatile boolean running;
+        /** Set by the 停止 button; polled by every worker before it starts a source. */
+        static volatile boolean stop;
+        static volatile int done;
+        static volatile int total;
+        static volatile int skipped;
+        static volatile int timedOut;
         static String keyword = "";
+        static boolean stopped;
         static final List<Books.Book> books = new ArrayList<Books.Book>();
         static final List<SourceSwitcher.Group> groups = new ArrayList<SourceSwitcher.Group>();
         static final List<String> failures = new ArrayList<String>();
-        static int total;
+        /** title key -> group, for incremental merging while results stream in. */
+        static final Map<String, SourceSwitcher.Group> byKey =
+                new HashMap<String, SourceSwitcher.Group>();
+
+        /**
+         * Every mutation of {@link #groups} happens under this lock (the worker thread
+         * appends, the UI thread copies), so a streaming search cannot make the list view
+         * iterate a list that is being modified.
+         */
+        static List<SourceSwitcher.Group> snapshotGroups() {
+            synchronized (books) {
+                return new ArrayList<SourceSwitcher.Group>(groups);
+            }
+        }
+
+        static int groupCount() {
+            synchronized (books) {
+                return groups.size();
+            }
+        }
+
+        static void reset() {
+            synchronized (books) {
+                books.clear();
+                groups.clear();
+                byKey.clear();
+            }
+            failures.clear();
+            done = 0;
+            skipped = 0;
+            timedOut = 0;
+            stopped = false;
+        }
     }
 
     private SourceStore store;
@@ -84,7 +125,10 @@ public class SearchActivity extends Activity {
     private TextView empty;
     private ListView list;
     private ResultAdapter adapter;
+    /** The 搜索 / 停止 control (a TextView in the layout, so it can change label in place). */
+    private TextView go;
     private final Handler handler = new Handler();
+    private long lastUiUpdate;
 
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -92,10 +136,12 @@ public class SearchActivity extends Activity {
         setContentView(R.layout.act_search);
 
         store = new SourceStore(this);
+        SourceHealth.attach(this);
         input = (EditText) findViewById(R.id.search_input);
         status = (TextView) findViewById(R.id.search_status);
         empty = (TextView) findViewById(R.id.search_empty);
         list = (ListView) findViewById(R.id.search_list);
+        go = (TextView) findViewById(R.id.search_go);
 
         adapter = new ResultAdapter();
         list.setAdapter(adapter);
@@ -122,9 +168,13 @@ public class SearchActivity extends Activity {
             }
         });
 
-        findViewById(R.id.search_go).setOnClickListener(new View.OnClickListener() {
+        go.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                startSearch();
+                if (State.running) {
+                    stopSearch();
+                } else {
+                    startSearch();
+                }
             }
         });
 
@@ -133,9 +183,10 @@ public class SearchActivity extends Activity {
         if (State.running || State.groups.size() > 0) {
             input.setText(State.keyword);
             if (State.running) {
-                status.setText("搜索中…（" + State.total + " 个书源，并行）");
+                go.setText("停止");
                 empty.setVisibility(View.GONE);
                 list.setVisibility(View.VISIBLE);
+                updateStatus();
             }
         }
         applyResults();
@@ -188,38 +239,52 @@ public class SearchActivity extends Activity {
         }
 
         State.running = true;
+        State.stop = false;
         State.keyword = kw;
-        State.books.clear();
-        State.groups.clear();
-        State.failures.clear();
+        State.reset();
         State.total = sources.size();
 
         adapter.setItems(new ArrayList<SourceSwitcher.Group>());
-        status.setText("搜索中…（" + sources.size() + " 个书源，并行）");
+        go.setText("停止");
+        status.setText("搜索中…（" + sources.size() + " 个书源）");
         empty.setVisibility(View.GONE);
         list.setVisibility(View.VISIBLE);
-        Log.i(TAG, "search: kw=" + kw + " sources=" + sources.size());
+        Log.i(TAG, "search: kw=" + kw + " sources=" + sources.size()
+                + " knownGood=" + SourceHealth.knownGoodCount());
 
         final List<BookSource> snapshot = new ArrayList<BookSource>(sources);
         Thread t = new Thread(new Runnable() {
             public void run() {
+                final long t0 = System.currentTimeMillis();
                 final List<String> failures = new ArrayList<String>();
-                final List<Books.Book> found = Engine.searchAll(snapshot, kw, 1, failures);
-                final List<SourceSwitcher.Group> merged = merge(found);
+                final List<Books.Book> found = SearchJob.run(snapshot, kw, 1, failures,
+                        new SearchJob.Listener() {
+                            public void onSourceDone(int done, int total, BookSource src,
+                                                     List<Books.Book> books, String note) {
+                                State.done = done;
+                                deliver(books, note);
+                            }
+
+                            public boolean cancelled() {
+                                return State.stop;
+                            }
+                        }, SearchJob.DEFAULT_BUDGET_MS);
                 handler.post(new Runnable() {
                     public void run() {
-                        State.books.clear();
-                        State.books.addAll(found);
-                        State.groups.clear();
-                        State.groups.addAll(merged);
                         State.failures.clear();
                         State.failures.addAll(failures);
+                        State.books.clear();
+                        State.books.addAll(found);
                         State.running = false;
-                        SourceSwitcher.register(merged);
+                        SourceSwitcher.register(State.snapshotGroups());
+                        go.setText("搜索");
+                        go.setEnabled(true);
                         applyResults();
                         Log.i(TAG, "search done: " + found.size() + " hits, "
-                                + merged.size() + " books after merge, failures="
-                                + failures.size());
+                                + State.groupCount() + " books after merge, failures="
+                                + failures.size() + " done=" + State.done + "/" + State.total
+                                + " skippedHost=" + State.skipped + " stopped=" + State.stopped
+                                + " ms=" + (System.currentTimeMillis() - t0));
                     }
                 });
             }
@@ -227,73 +292,125 @@ public class SearchActivity extends Activity {
         t.start();
     }
 
-    // --------------------------------------------------------------- merging
-
     /**
-     * Group hits by normalised title, preserving the order in which each book first appeared.
-     *
-     * The current source of each group is picked at random. There is no ranking signal that
-     * survives the TLS-1.0 filtering (a site being reachable says nothing about whether its
-     * 目录 parses), so a random pick is honest about what we know, and 换源 is one tap away.
+     * Called on a worker thread for every finished source. The books go straight into the
+     * shared lists (so nothing is lost if the activity is recreated) and the list is
+     * repainted on a throttle, because a 200-source search would otherwise post hundreds of
+     * refreshes a second.
      */
-    private static List<SourceSwitcher.Group> merge(List<Books.Book> hits) {
-        List<SourceSwitcher.Group> groups = new ArrayList<SourceSwitcher.Group>();
-        Map<String, SourceSwitcher.Group> byKey = new HashMap<String, SourceSwitcher.Group>();
-        if (hits == null) {
-            return groups;
+    private void deliver(List<Books.Book> books, String note) {
+        synchronized (State.books) {
+            if (books != null && books.size() > 0) {
+                for (int i = 0; i < books.size(); i++) {
+                    Books.Book b = books.get(i);
+                    State.books.add(b);
+                    addToGroup(b);
+                }
+            }
+            if (note != null) {
+                State.skipped++;
+                if ("超时未查".equals(note)) {
+                    State.timedOut++;
+                }
+            }        }
+        long now = System.currentTimeMillis();
+        if (now - lastUiUpdate < UI_THROTTLE_MS) {
+            return;
         }
-        for (int i = 0; i < hits.size(); i++) {
-            Books.Book b = hits.get(i);
-            if (b == null || b.name == null || b.name.length() == 0) {
-                continue;
+        lastUiUpdate = now;
+        handler.post(new Runnable() {
+            public void run() {
+                if (State.running) {
+                    updateStatus();
+                }
+                adapter.setItems(State.snapshotGroups());
             }
-            if (b.bookUrl == null || b.bookUrl.length() == 0) {
-                continue;
-            }
-            String key = Engine.mergeKey(b);
-            if (key.length() == 0) {
-                continue;
-            }
-            SourceSwitcher.Group g = byKey.get(key);
-            if (g == null) {
-                g = SourceSwitcher.newGroup(key, b.name);
-                byKey.put(key, g);
-                groups.add(g);
-            }
-            g.add(new SourceSwitcher.SrcBook(b.sourceUrl, b.sourceName, b));
+        });
+    }
+
+    /** Merge one book into the group list, creating the group on first sight. */
+    private static void addToGroup(Books.Book b) {
+        if (b == null || b.name == null || b.name.length() == 0) {
+            return;
         }
-        Random rnd = new Random();
-        for (int i = 0; i < groups.size(); i++) {
-            SourceSwitcher.Group g = groups.get(i);
-            g.select(g.size() > 1 ? rnd.nextInt(g.size()) : 0);
+        if (b.bookUrl == null || b.bookUrl.length() == 0) {
+            return;
         }
-        return groups;
+        String key = Engine.mergeKey(b);
+        if (key.length() == 0) {
+            return;
+        }
+        SourceSwitcher.Group g = State.byKey.get(key);
+        if (g == null) {
+            g = SourceSwitcher.newGroup(key, b.name);
+            State.byKey.put(key, g);
+            State.groups.add(g);
+        }
+        g.add(new SourceSwitcher.SrcBook(b.sourceUrl, b.sourceName, b));
+        // The first source that found the book stays selected: with results streaming in,
+        // re-picking on every arrival would move the row the user is about to tap.
+        if (g.current() == null) {
+            g.select(0);
+        }
+    }
+
+    private void stopSearch() {
+        State.stop = true;
+        State.stopped = true;
+        go.setEnabled(false);
+        status.setText("正在停止…已找到 " + State.groupCount() + " 本");
+        Log.i(TAG, "search: stop requested at " + State.done + "/" + State.total);
+    }
+
+    private void updateStatus() {
+        StringBuilder sb = new StringBuilder("搜索中 ");
+        sb.append(State.done).append('/').append(State.total);
+        sb.append(" · 找到 ").append(State.groupCount()).append(" 本");
+        if (State.skipped > 0) {
+            sb.append(" · 跳过 ").append(State.skipped).append(" 个不可达源");
+        }
+        status.setText(sb.toString());
     }
 
     private void applyResults() {
-        adapter.setItems(new ArrayList<SourceSwitcher.Group>(State.groups));
+        adapter.setItems(State.snapshotGroups());
+        int groups = State.groupCount();
         StringBuilder sb = new StringBuilder();
-        sb.append("找到 ").append(State.groups.size()).append(" 本");
-        if (State.books.size() > State.groups.size()) {
+        sb.append("找到 ").append(groups).append(" 本");
+        if (State.books.size() > groups) {
             sb.append("（").append(State.books.size()).append(" 个来源）");
         }
-        if (State.failures.size() > 0) {
+        if (State.stopped) {
+            sb.append("，已停止（查了 ").append(State.done).append('/').append(State.total)
+              .append(" 个书源）");
+        } else if (State.timedOut > 0) {
+            sb.append("，").append(State.timedOut).append(" 个书源超时未查");
+        } else if (State.failures.size() > 0) {
             sb.append("，").append(State.failures.size()).append(" 个书源无结果");
         }
+        if (State.skipped > 0) {
+            sb.append("，跳过 ").append(State.skipped).append(" 个不可达源");
+        }
         status.setText(sb.toString());
-        if (State.groups.size() > 0) {
+        if (groups > 0) {
             empty.setVisibility(View.GONE);
             list.setVisibility(View.VISIBLE);
-        } else if (!State.running && State.total > 0) {
+        } else if (!State.running && State.total > 0 && State.done > 0) {
             StringBuilder m = new StringBuilder("没有找到结果\n\n");
             for (int i = 0; i < State.failures.size() && i < 5; i++) {
                 m.append(State.failures.get(i)).append('\n');
+            }
+            if (State.skipped > 0) {
+                m.append("\n跳过 ").append(State.skipped)
+                 .append(" 个这次已确认不可达的书源。\n再搜一次会重新尝试它们。");
             }
             setEmpty(m.toString());
         } else if (!State.running) {
             setEmpty("输入书名后点「搜索」\n会在所有已启用的书源里查找\n\n"
                     + "同一本书在多个源都有时只显示一行，\n"
-                    + "点进去可以换源，长按可以直接选源。");
+                    + "点进去可以换源，长按可以直接选源。\n\n"
+                    + "结果会边搜边出现，随时可以「停止」，\n"
+                    + "已找到的书会保留。");
         }
     }
 
@@ -320,11 +437,15 @@ public class SearchActivity extends Activity {
 
     /** Source picker used by the long-press and by 换源 downstream. */
     private void pickSource(final SourceSwitcher.Group g, final Books.Book ignore) {
-        final String[] labels = new String[g.size()];
-        final int cur = g.indexOfCurrent();
-        for (int i = 0; i < g.size(); i++) {
-            SourceSwitcher.SrcBook s = g.items.get(i);
-            labels[i] = (i == cur ? "● " : "○ ") + s.sourceName;
+        final String[] labels;
+        final int cur;
+        synchronized (State.books) {
+            labels = new String[g.size()];
+            cur = g.indexOfCurrent();
+            for (int i = 0; i < g.size(); i++) {
+                SourceSwitcher.SrcBook s = g.items.get(i);
+                labels[i] = (i == cur ? "● " : "○ ") + s.sourceName;
+            }
         }
         new AlertDialog.Builder(this)
                 .setTitle("选择书源：" + g.name)
@@ -391,38 +512,46 @@ public class SearchActivity extends Activity {
                 v = getLayoutInflater().inflate(R.layout.row_book, null);
             }
             SourceSwitcher.Group g = items.get(position);
-            SourceSwitcher.SrcBook cur = g.current();
-            Books.Book b = (cur == null) ? null : cur.book;
+            String titleText;
+            String subText;
+            // A streaming search appends to the group while the list is being painted, so
+            // every read of it happens under the same lock the worker uses.
+            synchronized (State.books) {
+                SourceSwitcher.SrcBook cur = g.current();
+                Books.Book b = (cur == null) ? null : cur.book;
+                titleText = g.name;
+                StringBuilder sb = new StringBuilder();
+                if (cur != null && cur.sourceName.length() > 0) {
+                    sb.append("【").append(cur.sourceName);
+                    if (g.size() > 1) {
+                        sb.append(" · ").append(g.size()).append(" 源");
+                    }
+                    sb.append("】");
+                }
+                if (b != null && b.author != null && b.author.length() > 0) {
+                    if (sb.length() > 0) {
+                        sb.append(" ");
+                    }
+                    sb.append(b.author);
+                }
+                if (b != null && b.kind != null && b.kind.length() > 0) {
+                    if (sb.length() > 0) {
+                        sb.append("  |  ");
+                    }
+                    sb.append(b.kind);
+                }
+                if (b != null && b.wordCount != null && b.wordCount.length() > 0) {
+                    if (sb.length() > 0) {
+                        sb.append("  |  ");
+                    }
+                    sb.append(b.wordCount).append("字");
+                }
+                subText = sb.toString();
+            }
             TextView title = (TextView) v.findViewById(R.id.row_title);
             TextView sub = (TextView) v.findViewById(R.id.row_sub);
-            title.setText(g.name);
-            StringBuilder sb = new StringBuilder();
-            if (cur != null && cur.sourceName.length() > 0) {
-                sb.append("【").append(cur.sourceName);
-                if (g.size() > 1) {
-                    sb.append(" · ").append(g.size()).append(" 源");
-                }
-                sb.append("】");
-            }
-            if (b != null && b.author != null && b.author.length() > 0) {
-                if (sb.length() > 0) {
-                    sb.append(" ");
-                }
-                sb.append(b.author);
-            }
-            if (b != null && b.kind != null && b.kind.length() > 0) {
-                if (sb.length() > 0) {
-                    sb.append("  |  ");
-                }
-                sb.append(b.kind);
-            }
-            if (b != null && b.wordCount != null && b.wordCount.length() > 0) {
-                if (sb.length() > 0) {
-                    sb.append("  |  ");
-                }
-                sb.append(b.wordCount).append("字");
-            }
-            sub.setText(sb.toString());
+            title.setText(titleText);
+            sub.setText(subText);
             return v;
         }
     }

@@ -25,6 +25,9 @@ import java.lang.reflect.Method;
  *   - Activity.requestPermissions           (API 23)
  *   - Activity.onRequestPermissionsResult   (API 23; overridden without super, since
  *     the API-1 android.jar has no such method to call super on)
+ *   - Activity.overridePendingTransition    (API 5; the tab bar's one-shot, direction-aware
+ *     page slide. Without it the window animation style still applies, it just cannot say
+ *     forward or back)
  *
  * Storage is the one runtime permission the app needs: the shelf/sources/progress live
  * in the app's private directory, but importing a book-source .json or a local book
@@ -46,6 +49,8 @@ public final class Compat {
             "android.permission.WRITE_EXTERNAL_STORAGE" };
 
     private static int sdkLevel = -1;
+    /** Set once the platform has said it has no overridePendingTransition (API 1..4). */
+    private static boolean noTransitionOverride = false;
 
     private Compat() { }
 
@@ -120,5 +125,34 @@ public final class Compat {
             Log.i(TAG, "compat: cannot ask for the storage permission: " + t);
         }
         return false;
+    }
+
+    /**
+     * Make the activity transition that follows use exactly these two animations.
+     *
+     * The tab bar needs this because a window animation style is fixed per window and
+     * therefore cannot tell "tapped the page on the right" from "tapped the page on the
+     * left"; a one-shot override can. Returns false when the platform has no
+     * overridePendingTransition (API 1..4), where the window animation style set by Ui
+     * stays in charge - horizontal either way there, just not direction aware.
+     *
+     * Call it right AFTER startActivity/finish: the platform records it as "the next
+     * transition this app starts".
+     */
+    public static boolean overrideTransition(Activity act, int enterAnim, int exitAnim) {
+        if (noTransitionOverride) {
+            return false;
+        }
+        try {
+            Method m = Class.forName("android.app.Activity")
+                    .getMethod("overridePendingTransition", new Class[] { Integer.TYPE, Integer.TYPE });
+            m.invoke(act, new Object[] { Integer.valueOf(enterAnim), Integer.valueOf(exitAnim) });
+            return true;
+        } catch (Throwable t) {
+            // NoSuchMethodException on API 1..4; log once, not on every tab tap.
+            noTransitionOverride = true;
+            Log.i(TAG, "compat: no overridePendingTransition on sdk=" + sdk() + " (" + t + ")");
+            return false;
+        }
     }
 }

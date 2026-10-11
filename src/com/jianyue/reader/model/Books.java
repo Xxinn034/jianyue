@@ -79,6 +79,12 @@ public final class Books {
         public List<Book> books = new ArrayList<Book>();
         public String error;
         public long elapsedMs;
+        /**
+         * True when the failure was that the site could not be reached (DNS, refused
+         * connection, TLS handshake, connect timeout) rather than an HTTP status or a rule
+         * that parsed nothing. Only this kind of failure is remembered against the source.
+         */
+        public boolean unreachable;
 
         public boolean ok() {
             return error == null;

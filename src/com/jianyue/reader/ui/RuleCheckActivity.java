@@ -332,6 +332,138 @@ public class RuleCheckActivity extends Activity {
         expect("paragraphs: blank lines dropped",
                 com.jianyue.reader.util.Paragraphs.format("甲。\n\n\n乙。", "第1章", null),
                 "第1章\n\u3000\u3000甲。\n\u3000\u3000乙。");
+
+        // ---------------------------------------------------------------
+        // 引擎兼容层 (2026-10)：为了能直接吃「阅读 3.0」的书源而补的四块
+        //   1. @ownText 取值后缀
+        //   2. URL 末尾 ", {json}" 请求选项（POST / headers / charset）
+        //   3. 旧版扁平格式书源 → 现代结构的字段与方言转换
+        //   4. JS 宿主 java.* / Packages / source / book（书源脚本直接调用宿主）
+        // ---------------------------------------------------------------
+
+        // ---- 1. @ownText: 只要元素自身的直接文本，不含子元素文本
+        final String ownHtml = "<html><body>"
+                + "<div class=\"row\">甲<span>乙</span>丙</div>"
+                + "<div class=\"row\">只有我</div></body></html>";
+        com.jianyue.reader.rule.Html.El ownDoc = com.jianyue.reader.rule.Html.parse(ownHtml);
+        expect("ownText skips child text",
+                Rules.getString(ownDoc, "class.row.0@ownText", Rules.CTX_HTML, null), "甲丙");
+        expect("text includes child text",
+                Rules.getString(ownDoc, "class.row.0@text", Rules.CTX_HTML, null), "甲乙丙");
+
+        // ---- 2. ", {json}" options tail (阅读: AnalyzeUrl 的 options)
+        com.jianyue.reader.net.UrlOptions uo = com.jianyue.reader.net.UrlOptions.parse(
+                "http://a.example.com/search, {\"method\":\"POST\",\"body\":\"k={{key}}\","
+                        + "\"charset\":\"gbk\",\"headers\":{\"Referer\":\"http://a.example.com/\"}}");
+        expect("url option: url split", uo.url, "http://a.example.com/search");
+        expect("url option: method", uo.method, "POST");
+        expect("url option: body", uo.body, "k={{key}}");
+        expect("url option: charset", uo.charset, "gbk");
+        expect("url option: header", uo.headers.get("Referer"), "http://a.example.com/");
+        expect("url option: no tail when absent",
+                com.jianyue.reader.net.UrlOptions.parse("http://a/b?x=1,2").url, "http://a/b?x=1,2");
+
+        // ---- 3. 旧版扁平格式 (阅读 2.x) 转换
+        try {
+            org.json.JSONObject flat = new org.json.JSONObject();
+            flat.put("bookSourceName", "旧格式站");
+            flat.put("bookSourceUrl", "http://old.example.com");
+            flat.put("ruleSearchUrl", "/search?q=searchKey&p=searchPage");
+            flat.put("ruleSearchList", "class.result-list@tag.li");
+            flat.put("ruleSearchName", "class.name|class.title");
+            flat.put("ruleSearchNoteUrl", "tag.a@href");
+            flat.put("ruleChapterList", "id.chapterList@tag.a");
+            flat.put("ruleBookContent", "id.content#<[^>]+>#");
+            flat.put("httpUserAgent", "Mozilla/5.0 old");
+            com.jianyue.reader.model.BookSource conv =
+                    com.jianyue.reader.model.BookSource.fromJson(flat);
+            expect("legacy: detected and converted", conv == null ? "null" : "ok", "ok");
+            if (conv != null) {
+                expect("legacy: searchUrl placeholders",
+                        conv.searchUrl, "/search?q={{key}}&p={{page}}");
+                expect("legacy: ruleSearchList -> bookList",
+                        conv.searchRules.bookList, "class.result-list@tag.li");
+                expect("legacy: single | becomes ||",
+                        conv.searchRules.name, "class.name||class.title");
+                expect("legacy: single # becomes ##",
+                        conv.contentRules.content, "id.content##<[^>]+>##");
+                expect("legacy: chapterList", conv.tocRules.chapterList,
+                        "id.chapterList@tag.a");
+                expect("legacy: httpUserAgent -> header", conv.header,
+                        "User-Agent@Mozilla/5.0 old");
+            }
+            expect("legacy: @Header: -> options",
+                    com.jianyue.reader.model.LegacySource.toNewUrl(
+                            "http://a/b@Header:{Referer:\"http://a/\"}"),
+                    "http://a/b,{\"headers\":{\"Referer\":\"http://a/\"}}");
+            expect("legacy: charset option",
+                    com.jianyue.reader.model.LegacySource.toNewUrl("/s?q=searchKey|charset=gbk"),
+                    "/s?q={{key}},{\"charset\":\"gbk\"}");
+            expect("legacy: post body option",
+                    com.jianyue.reader.model.LegacySource.toNewUrl("/api@k=searchKey"),
+                    "/api,{\"method\":\"POST\",\"body\":\"k={{key}}\"}");
+            expect("legacy: js rule untouched",
+                    com.jianyue.reader.model.LegacySource.toNewRule("@js:result|split('&')"),
+                    "@js:result|split('&')");
+        } catch (Throwable e) {
+            Log.i(TAG, "rulecheck: legacy fixture failed " + e);
+            fail++;
+        }
+
+        // ---- 4. {{page+N}} 模板（旧格式的 searchPage+1 会变成这个样子）
+        expect("url template page+1",
+                com.jianyue.reader.engine.Engine.expandTemplate(
+                        "http://a/b?p={{page+1}}", null, "x", 2),
+                "http://a/b?p=3");
+        expect("url template key is url-encoded",
+                com.jianyue.reader.engine.Engine.expandTemplate(
+                        "http://a/b?q={{key}}", null, "斗罗", 1),
+                "http://a/b?q=%E6%96%97%E7%BD%97");
+
+        // ---- 5. JS 宿主：java.* / Packages / source / book
+        expect("js java.base64Encode",
+                com.jianyue.reader.rule.Js.run("java.base64Encode('abc')", (com.jianyue.reader.rule.Js.Bind) null),
+                "YWJj");
+        expect("js java.base64Decode",
+                com.jianyue.reader.rule.Js.run("java.base64Decode('YWJj')", (com.jianyue.reader.rule.Js.Bind) null),
+                "abc");
+        expect("js java.md5Encode",
+                com.jianyue.reader.rule.Js.run("java.md5Encode('abc')", (com.jianyue.reader.rule.Js.Bind) null),
+                "900150983cd24fb0d6963f7d28e17f72");
+        expect("js Packages available",
+                com.jianyue.reader.rule.Js.run(
+                        "new Packages.java.lang.StringBuilder('ab').append('c').toString()",
+                        (com.jianyue.reader.rule.Js.Bind) null),
+                "abc");
+        com.jianyue.reader.rule.Js.Bind bind = new com.jianyue.reader.rule.Js.Bind();
+        bind.result = "<div class=\"n\">书名甲</div>";
+        bind.book = new String[]{"斗罗大陆", "唐家三少", "http://a/book/1", "", "", ""};
+        bind.sourceName = "测试源";
+        bind.sourceUrl = "http://a.example.com";
+        expect("js book.name bound",
+                com.jianyue.reader.rule.Js.run("book.name + '/' + book.author", bind),
+                "斗罗大陆/唐家三少");
+        expect("js source.name bound",
+                com.jianyue.reader.rule.Js.run("source.name", bind), "测试源");
+        expect("js java.getString runs a rule",
+                com.jianyue.reader.rule.Js.run("java.getString('class.n@text')", bind), "书名甲");
+        com.jianyue.reader.rule.Js.run("java.put('ck','7')", bind);
+        expect("js java.put visible to @get:",
+                Rules.getString(root, "@get:ck", Rules.CTX_JSON, null), "7");
+
+        // Which java.* calls actually resolve, one line in the log. A missing method shows up
+        // as "not a function" here; without this the only symptom is an empty field.
+        com.jianyue.reader.rule.Js.Bind probeBind = new com.jianyue.reader.rule.Js.Bind();
+        probeBind.result = "<div class=\"n\">书名甲</div>";
+        Log.i(TAG, "rulecheck: js probe => " + com.jianyue.reader.rule.Js.run(
+                "var o=[];"
+                        + "try{o.push('b64='+java.base64Encode('x'))}catch(e){o.push('b64=ERR')}"
+                        + "try{o.push('uri='+java.encodeURI('a b'))}catch(e){o.push('uri=ERR')}"
+                        + "try{o.push('get='+java.get('zz'))}catch(e){o.push('get=ERR')}"
+                        + "try{o.push('put='+java.put('k','v'))}catch(e){o.push('put=ERR')}"
+                        + "try{o.push('gs='+java.getString('class.n@text'))}"
+                        + "catch(e){o.push('gs=ERR')}"
+                        + "o.join('|')", probeBind));
     }
 
     /** Compare against expectation and log a verdict. */

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tab switch the other way: 本地导入 -> 书源 -> 书架 (a tap to the left, or the back key
+  closing a tab page). The page coming in arrives from the left.
+-->
+<translate xmlns:android="http://schemas.android.com/apk/res/android"
+    android:fromXDelta="-100%"
+    android:toXDelta="0"
+    android:duration="220"
+    android:interpolator="@android:anim/decelerate_interpolator" />

@@ -51,6 +51,30 @@ public final class Http {
         public String error;
 
         /**
+         * Class name of the throwable that produced {@link #error}, or null for an HTTP
+         * status failure. Callers that need to tell "the host is unreachable" from "the
+         * page answered with 404" read this instead of parsing error.
+         */
+        public String errorClass;
+
+        /**
+         * True when the request never got an HTTP answer because the host could not be
+         * reached (DNS, refused connection, TLS handshake, connect timeout). This is the
+         * class of failure that says something about the SITE rather than about the rules.
+         */
+        public boolean unreachable() {
+            if (error == null || errorClass == null) {
+                return false;
+            }
+            return errorClass.indexOf("UnknownHostException") >= 0
+                    || errorClass.indexOf("ConnectException") >= 0
+                    || errorClass.indexOf("SocketTimeoutException") >= 0
+                    || errorClass.indexOf("SSL") >= 0
+                    || errorClass.indexOf("NoRouteToHost") >= 0
+                    || errorClass.indexOf("SocketException") >= 0;
+        }
+
+        /**
          * True when the call actually produced a usable response.
          *
          * code must be a real HTTP status: getResponseCode() returns -1 when the
@@ -204,6 +228,125 @@ public final class Http {
         }
     }
 
+    // ------------------------------------------------- negative host cache
+    //
+    // A search with a few hundred imported sources spends nearly all of its time on hosts
+    // that will never answer: the connect attempt has to run out its timeout for each one.
+    // Worse, several sources usually point at the SAME dead host, and without a cache every
+    // one of them pays the timeout again.
+    //
+    // So a failure that is a property of the HOST - the name does not resolve, the
+    // connection is refused, the TLS handshake fails, the connect times out - is remembered
+    // for a while and everything on that host is skipped immediately afterwards. Read
+    // timeouts and HTTP error codes are deliberately NOT cached: those say something about
+    // one page, not about the site.
+    //
+    // TTLs are short enough that a site which comes back is retried within the same session
+    // (the user only has to wait for the next search to start, not restart the app).
+
+    private static final long DEAD_TTL_MS = 5 * 60 * 1000L;       // refused / unreachable
+    private static final long SLOW_TTL_MS = 90 * 1000L;           // connect timed out
+    private static final long HTTPS_BROKEN_TTL_MS = 30 * 60 * 1000L;
+
+    private static final Map<String, Long> DEAD_HOSTS =
+            java.util.Collections.synchronizedMap(new HashMap<String, Long>());
+    private static final Map<String, Long> HTTPS_BROKEN =
+            java.util.Collections.synchronizedMap(new HashMap<String, Long>());
+
+    /** Human-readable reason a host is currently being skipped, or null when it is not. */
+    public static String deadReason(String url) {
+        String h = hostKey(url);
+        if (h.length() == 0) {
+            return null;
+        }
+        Long until = DEAD_HOSTS.get(h);
+        if (until == null) {
+            return null;
+        }
+        if (until.longValue() <= System.currentTimeMillis()) {
+            DEAD_HOSTS.remove(h);
+            return null;
+        }
+        return DEAD_HOST_REASONS.get(h);
+    }
+
+    private static final Map<String, String> DEAD_HOST_REASONS =
+            java.util.Collections.synchronizedMap(new HashMap<String, String>());
+
+    /** Forget every remembered host failure (the "重搜全部" path). */
+    public static void clearHostCache() {
+        DEAD_HOSTS.clear();
+        DEAD_HOST_REASONS.clear();
+        HTTPS_BROKEN.clear();
+    }
+
+    public static int hostCacheSize() {
+        return DEAD_HOSTS.size();
+    }
+
+    /** Called from request()'s failure path. See the block comment above for the rules. */
+    private static void noteHostFailure(String url, Throwable t) {
+        try {
+            String h = hostKey(url);
+            if (h.length() == 0 || t == null) {
+                return;
+            }
+            String cls = t.getClass().getName();
+            String msg = String.valueOf(t.getMessage());
+            long now = System.currentTimeMillis();
+            // unwrap one level: HttpURLConnection usually reports the real cause directly,
+            // but some platforms wrap it.
+            Throwable cause = t.getCause();
+            String causeCls = cause == null ? "" : cause.getClass().getName();
+
+            if (cls.indexOf("UnknownHost") >= 0 || causeCls.indexOf("UnknownHost") >= 0) {
+                // Deliberately NOT cached. A missing name fails in milliseconds, so caching
+                // buys nothing, and a resolver hiccup (the API-1 emulator's slirp DNS degrades
+                // over uptime; a phone switching networks does the same) would otherwise blank
+                // out every source on that host for minutes. Measured: caching it turned a
+                // 120-source search into "101 sources skipped" while the DNS was fine.
+                Log.i(TAG, "net: host unresolved (not cached): " + h);
+            } else if (cls.indexOf("ConnectException") >= 0
+                    || causeCls.indexOf("ConnectException") >= 0) {
+                markDead(h, "连接被拒绝", DEAD_TTL_MS, now);
+            } else if (cls.indexOf("NoRouteToHost") >= 0 || cls.indexOf("SocketException") >= 0) {
+                markDead(h, "网络不可达", DEAD_TTL_MS, now);
+            } else if (cls.indexOf("SSL") >= 0 || msg.indexOf("SSL") >= 0 || msg.indexOf("Certificate") >= 0) {
+                // TLS 1.0 ceiling, NOT a dead site: the same host usually answers over plain
+                // http, and marking it dead here would skip every other source on it even
+                // though their http URL works. Only remember "use http for this host".
+                HTTPS_BROKEN.put(h, Long.valueOf(now + HTTPS_BROKEN_TTL_MS));
+            } else if (cls.indexOf("SocketTimeout") >= 0) {
+                markDead(h, "连接超时", SLOW_TTL_MS, now);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void markDead(String host, String why, long ttl, long now) {
+        if (host == null || host.length() == 0) {
+            return;
+        }
+        DEAD_HOSTS.put(host, Long.valueOf(now + ttl));
+        DEAD_HOST_REASONS.put(host, why == null ? "" : why);
+    }
+
+    private static boolean httpsBroken(String url) {
+        String h = hostKey(url);
+        if (h.length() == 0) {
+            return false;
+        }
+        Long until = HTTPS_BROKEN.get(h);
+        if (until == null) {
+            return false;
+        }
+        if (until.longValue() <= System.currentTimeMillis()) {
+            HTTPS_BROKEN.remove(h);
+            return false;
+        }
+        return true;
+    }
+
     /**
      * Try the URL as given; if it is HTTPS and the handshake fails for a reason that
      * looks like the TLS-1.0 ceiling, retry the same host over plain HTTP.
@@ -228,6 +371,16 @@ public final class Http {
             String httpUrl = "http://" + url.substring("https://".length());
             Resp r = get(httpUrl, referer, ua, extra);
             if (r.ok() && r.code < 400) {
+                return r;
+            }
+        }
+        // Same for a host whose TLS handshake already failed once (TLS-1.0 ceiling): going
+        // straight to http turns a timeout into one failed request.
+        if (httpsBroken(url) && url.startsWith("https://")) {
+            String httpUrl = "http://" + url.substring("https://".length());
+            Resp r = get(httpUrl, referer, ua, extra);
+            if (r.ok() && r.code < 400) {
+                markHttpOnly(url);
                 return r;
             }
         }
@@ -259,6 +412,96 @@ public final class Http {
         return "HTTP " + r.code;
     }
 
+    /**
+     * Fetch a book-source URL that may carry the 阅读 options tail (", {json}").
+     *
+     * THE single entry point for every engine request: search, detail, 目录 and 正文 all call
+     * this, so the option semantics exist in exactly one place. Callers pass the raw rule
+     * result; nothing else has to know about POST bodies or per-request headers.
+     *
+     * The https -> http fallback is kept for POST as well: on API 1 the TLS 1.0 ceiling is
+     * the single most common reason a site is unreachable, and its plain-HTTP endpoint is
+     * usually the same service.
+     */
+    public static Resp fetch(String urlWithOptions, String referer,
+                             java.util.Map<String, String> sourceHeaders) {
+        UrlOptions o = UrlOptions.parse(urlWithOptions);
+        if (o.url.length() == 0) {
+            Resp bad = new Resp();
+            bad.finalUrl = "";
+            bad.error = "URL 为空";
+            bad.errorClass = "IllegalArgumentException";
+            return bad;
+        }
+        java.util.Map<String, String> headers = new java.util.HashMap<String, String>();
+        if (sourceHeaders != null) {
+            headers.putAll(sourceHeaders);
+        }
+        headers.putAll(o.headers);
+        if (o.unsupported != null) {
+            Log.i(TAG, "net: " + o.url + " needs something unsupported: " + o.unsupported);
+        }
+        Resp r;
+        if (o.isPost()) {
+            r = requestWithFallback(o, referer, headers);
+        } else {
+            r = getWithHttpFallback(o.url, referer, null, headers);
+        }
+        // A source-declared charset beats both the Content-Type header and our detector:
+        // 阅读 sources write it precisely because the site lies about its encoding.
+        if (r != null && o.charset != null && o.charset.length() > 0) {
+            r.charsetHint = o.charset;
+        }
+        return r;
+    }
+
+    /** POST (or any other verb) with the same https -> http retry the GET path has. */
+    private static Resp requestWithFallback(UrlOptions o, String referer,
+                                            java.util.Map<String, String> headers) {
+        byte[] body = encodeBody(o.body, o.charset);
+        Resp r = requestBytes(o.url, o.method, body, referer, null,
+                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, headers);
+        if (r.ok() && r.code < 400) {
+            return r;
+        }
+        if (o.url.startsWith("https://")) {
+            String httpUrl = "http://" + o.url.substring("https://".length());
+            Log.i(TAG, "net: " + o.method + " https failed (" + describeFailure(r)
+                    + "), retrying over http: " + httpUrl);
+            Resp r2 = requestBytes(httpUrl, o.method, body, referer, null,
+                    CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, headers);
+            if (r2.ok() && r2.code < 400) {
+                markHttpOnly(o.url);
+                return r2;
+            }
+        }
+        return r;
+    }
+
+    /**
+     * POST bodies are bytes on the wire. Most sources send UTF-8, but a 阅读 source may
+     * declare "charset":"gbk" - sending the body as UTF-8 then would hand the server
+     * mojibake and its search would come back empty.
+     */
+    private static byte[] encodeBody(String body, String charset) {
+        if (body == null) {
+            return null;
+        }
+        if (charset != null && charset.trim().length() > 0
+                && charset.toLowerCase().indexOf("utf") < 0) {
+            try {
+                return body.getBytes(charset.trim());
+            } catch (Throwable t) {
+                Log.i(TAG, "net: cannot encode the POST body as " + charset + ", using UTF-8");
+            }
+        }
+        try {
+            return body.getBytes("UTF-8");
+        } catch (Throwable t) {
+            return body.getBytes();
+        }
+    }
+
     /** Full control variant. */
     public static Resp request(String url, String method, String postBody,
                                String referer, String ua,
@@ -271,6 +514,27 @@ public final class Http {
                                String referer, String ua,
                                int connectTimeoutMs, int readTimeoutMs,
                                java.util.Map<String, String> extra) {
+        byte[] body = null;
+        if (postBody != null) {
+            try {
+                body = postBody.getBytes("UTF-8");
+            } catch (Throwable t) {
+                body = postBody.getBytes();
+            }
+        }
+        return requestBytes(url, method, body, referer, ua, connectTimeoutMs, readTimeoutMs, extra);
+    }
+
+    /**
+     * As above but with the body already encoded.
+     *
+     * A POST body's bytes are decided by the source's "charset" option, so the encoder has to
+     * happen before this call - re-encoding a String here as UTF-8 would corrupt a GBK body.
+     */
+    public static Resp requestBytes(String url, String method, byte[] postBody,
+                                    String referer, String ua,
+                                    int connectTimeoutMs, int readTimeoutMs,
+                                    java.util.Map<String, String> extra) {
         Resp out = new Resp();
         out.finalUrl = url;
         HttpURLConnection c = null;
@@ -289,22 +553,27 @@ public final class Http {
                 c.setRequestProperty("Referer", referer);
             }
             // Source-declared headers go last so they win over the defaults above.
+            boolean contentTypeSet = false;
             if (extra != null) {
                 for (java.util.Map.Entry<String, String> e : extra.entrySet()) {
                     String k = e.getKey();
                     String v = e.getValue();
                     if (k != null && v != null && k.length() > 0) {
                         c.setRequestProperty(k, v);
+                        if (k.equalsIgnoreCase("Content-Type")) {
+                            contentTypeSet = true;
+                        }
                     }
                 }
             }
             if (postBody != null) {
                 c.setDoOutput(true);
-                c.setRequestProperty("Content-Type",
-                        "application/x-www-form-urlencoded; charset=UTF-8");
-                byte[] payload = postBody.getBytes("UTF-8");
-                c.setFixedLengthStreamingMode(payload.length);
-                c.getOutputStream().write(payload);
+                if (!contentTypeSet) {
+                    c.setRequestProperty("Content-Type",
+                            "application/x-www-form-urlencoded; charset=UTF-8");
+                }
+                c.setFixedLengthStreamingMode(postBody.length);
+                c.getOutputStream().write(postBody);
                 c.getOutputStream().flush();
             }
 
@@ -312,6 +581,12 @@ public final class Http {
             out.contentType = c.getContentType();
             out.charsetHint = extractCharset(out.contentType);
             out.finalUrl = c.getURL() == null ? url : c.getURL().toString();
+            // The host answered, so whatever we remembered about it is wrong now.
+            String hk = hostKey(url);
+            if (hk.length() > 0) {
+                DEAD_HOSTS.remove(hk);
+                DEAD_HOST_REASONS.remove(hk);
+            }
 
             // collect a few useful headers
             collectHeader(c, out, "Set-Cookie");
@@ -339,6 +614,10 @@ public final class Http {
             }
         } catch (Throwable t) {
             out.error = t.getClass().getName() + ": " + t.getMessage();
+            out.errorClass = t.getClass().getName();
+            // Remember host-level failures so the other sources on the same dead site are
+            // not paid for one timeout at a time (see the negative-cache block above).
+            noteHostFailure(url, t);
             Log.i(TAG, "net: " + url + " failed -> " + out.error);
         } finally {
             if (c != null) {

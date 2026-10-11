@@ -199,6 +199,23 @@ $zip = [System.IO.Compression.ZipFile]::Open("$out\app.apk", 'Update')
 $existing = $zip.Entries | Where-Object { $_.FullName -eq 'classes.dex' }
 if ($existing) { $zip.Entries.Remove($existing) }
 [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, "$out\dex\classes.dex", 'classes.dex', 'Optimal') | Out-Null
+
+# Rhino's message catalog. The vendored rhino-api1.jar was recompiled from sources and its
+# resource files were dropped, so ScriptRuntime$DefaultMessageProvider cannot build ANY error
+# message: every JavaScript error surfaces as "MissingResourceException: null" instead of
+# "java is not defined" / "is not a function". Book-source debugging is impossible without it,
+# so the catalog is vendored in tools\sdk\rhino-res and packed into the APK as a class-path
+# resource (d8 only rewrites .class files, so a plain file must be added by hand).
+$rhinoMsg = Join-Path $Proj 'tools\sdk\rhino-res\org\mozilla\javascript\resources\Messages.properties'
+if (Test-Path -LiteralPath $rhinoMsg) {
+    $msgEntry = $zip.Entries | Where-Object { $_.FullName -eq 'org/mozilla/javascript/resources/Messages.properties' }
+    if ($msgEntry) { $zip.Entries.Remove($msgEntry) }
+    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $rhinoMsg,
+        'org/mozilla/javascript/resources/Messages.properties', 'Optimal') | Out-Null
+    Write-Output "rhino message catalog packed: 21921 bytes"
+} else {
+    Fail "rhino message catalog missing: $rhinoMsg"
+}
 $zip.Dispose()
 
 Step "6/8" "stamp targetSdkVersion + usesCleartextTraffic into the manifest"

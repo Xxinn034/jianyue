@@ -132,6 +132,29 @@
         <item name="android:background">@color/divider</item>
     </style>
 
+    <!--
+      Window animation style of the three tab pages (res/anim/tab_*). Set in code rather
+      than through android:theme, because replacing the app theme would replace everything
+      else in it too: the manifest never names a theme, so the platform picks
+      Theme.DeviceDefault (targetSdk 28) whose activity animation is Material's
+      "activity_open_enter" - an alpha fade PLUS a 6% vertical rise - and that vertical
+      movement is exactly what made the tab switch look jumpy.
+
+      Inheriting @android:style/Animation.Activity keeps every other slot (task, wallpaper,
+      window enter/exit) exactly as the platform had it; only the four activity slots below
+      are replaced. The parent id (0x01030001) is the same on API 1 and on API 26+.
+
+      Open = arriving from the right, close = leaving to the right, which matches the stack
+      the bar really is (书架 is the root): tapping 书源/本地导入 pushes right, tapping 书架
+      or pressing back pops left.
+    -->
+    <style name="TabAnim" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/tab_in_right</item>
+        <item name="android:activityOpenExitAnimation">@anim/tab_out_left</item>
+        <item name="android:activityCloseEnterAnimation">@anim/tab_in_left</item>
+        <item name="android:activityCloseExitAnimation">@anim/tab_out_right</item>
+    </style>
+
     <!-- top bar title -->
     <style name="TopTitle">
         <item name="android:layout_width">0dip</item>

@@ -141,6 +141,12 @@ public class BookSource {
         if (o == null) {
             return null;
         }
+        // 阅读 2.x / early 3.x exports are one flat object per site (ruleSearchList,
+        // ruleBookContent, ...). They are converted into the modern shape first, so exactly
+        // one code path knows how a BookSource is built.
+        if (LegacySource.isLegacy(o)) {
+            return LegacySource.convert(o);
+        }
         BookSource s = new BookSource();
         s.name = o.optString("bookSourceName", "").trim();
         s.url = o.optString("bookSourceUrl", "").trim();
