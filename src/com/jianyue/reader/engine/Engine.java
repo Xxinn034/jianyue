@@ -38,77 +38,140 @@ public final class Engine {
     // ---------------------------------------------------------------- search
 
     /**
-     * Search every source in parallel and return the merged result.
+     * Search every enabled source and return the merged result.
      *
-     * Why parallel: the sources are independent HTTP requests, and a serial loop made a
-     * multi-source search take as long as the SUM of every site's latency. On API 1 the
-     * dominant cost is waiting, not CPU, so a small pool cuts wall time roughly by the
-     * thread count. Results are reassembled in source order so the list does not shuffle
-     * between runs.
-     *
-     * The pool is deliberately small. An API-1 device has ~94 MB of RAM and each in-flight
-     * search holds a response body plus a parsed document, so more threads buy little and
-     * risk an OutOfMemoryError.
+     * The work itself lives in {@link SearchJob}: bounded-but-wide concurrency, per-source
+     * streaming, health ordering, dead-host skipping and a whole-search budget. This method
+     * stays as the plain "give me the answer" entry point used by the verifiers and by
+     * {@link #fillFromSearch}.
      */
     public static List<Books.Book> searchAll(List<BookSource> sources, String keyword,
                                              int page, List<String> failuresOut) {
-        final List<Books.Book> out = new ArrayList<Books.Book>();
-        if (sources == null || sources.size() == 0) {
-            return out;
-        }
-        int threads = Math.min(4, sources.size());
-        java.util.concurrent.ExecutorService pool =
-                java.util.concurrent.Executors.newFixedThreadPool(threads);
-        final List<List<Books.Book>> slots = new ArrayList<List<Books.Book>>();
-        final List<String> errors = new ArrayList<String>();
-        for (int i = 0; i < sources.size(); i++) {
-            slots.add(null);
-            errors.add(null);
-        }
+        return SearchJob.run(sources, keyword, page, failuresOut);
+    }
 
-        final java.util.concurrent.CountDownLatch latch =
-                new java.util.concurrent.CountDownLatch(sources.size());
-        for (int i = 0; i < sources.size(); i++) {
-            final int idx = i;
-            final BookSource src = sources.get(i);
-            pool.execute(new Runnable() {
-                public void run() {
-                    try {
-                        Books.SearchResult r = search(src, keyword, 1);
-                        if (r.ok() && r.books.size() > 0) {
-                            slots.set(idx, r.books);
-                        } else if (!r.ok()) {
-                            errors.set(idx, src.name + ": " + r.error);
-                        } else {
-                            errors.set(idx, src.name + ": 无结果");
-                        }
-                    } catch (Throwable t) {
-                        errors.set(idx, src.name + ": " + t.getClass().getSimpleName());
-                    } finally {
-                        latch.countDown();
-                    }
-                }
-            });
+    /**
+     * The search URL for one source, with {{key}} / {{page}} / {{keyword}} substituted and
+     * relative to bookSourceUrl. Returns "" when the source has no usable search URL.
+     *
+     * Split out of {@link #search} so the concurrent runner can fetch (many at once) and
+     * parse (a few at a time) as separate steps.
+     */
+    public static String searchUrlFor(BookSource src, String keyword, int page) {
+        if (src == null || src.searchUrl == null || src.searchUrl.length() == 0) {
+            return "";
         }
         try {
-            latch.await();
-        } catch (Throwable ignored) {
+            // The options tail (", {json}") must survive template expansion untouched: it is
+            // consumed by Http.fetch(), and letting {{ }} expansion see it would corrupt the
+            // JSON when a body happens to contain braces.
+            com.jianyue.reader.net.UrlOptions uo =
+                    com.jianyue.reader.net.UrlOptions.parse(src.searchUrl);
+            String expanded = expandTemplate(uo.url, src, keyword, page);
+            String abs = Rules.absUrl(src.url, expanded);
+            return abs + uo.tail;
+        } catch (Throwable t) {
+            Log.i(TAG, "engine.searchUrl failed " + t.getClass().getName() + ": " + t.getMessage());
+            return "";
         }
-        pool.shutdown();
+    }
 
-        // reassemble in the original source order
-        for (int i = 0; i < sources.size(); i++) {
-            List<Books.Book> got = slots.get(i);
-            if (got != null) {
-                out.addAll(got);
-            }
-            if (failuresOut != null && errors.get(i) != null) {
-                failuresOut.add(errors.get(i));
-            }
+    /**
+     * Expand the {{...}} placeholders 阅读 allows inside a URL.
+     *
+     * {{key}} is the URL-encoded keyword and {{page}} the page number - the two that predate
+     * the JS engine and are still what almost every source uses. Anything else is a JS
+     * expression ({{page+1}}, {{book.name}}, {{java.ajax(...)}}) evaluated with the same
+     * bindings a rule script sees.
+     */
+    public static String expandTemplate(String tpl, BookSource src, String keyword, int page) {
+        if (tpl == null || tpl.indexOf("{{") < 0) {
+            return tpl == null ? "" : tpl;
         }
-        Log.i(TAG, "engine.searchAll sources=" + sources.size()
-                + " threads=" + threads + " books=" + out.size());
-        return out;
+        String encKey;
+        try {
+            encKey = URLEncoder.encode(keyword == null ? "" : keyword, "UTF-8");
+        } catch (Throwable t) {
+            encKey = keyword == null ? "" : keyword;
+        }
+        StringBuilder out = new StringBuilder();
+        int i = 0;
+        int n = tpl.length();
+        while (i < n) {
+            int open = tpl.indexOf("{{", i);
+            if (open < 0) {
+                out.append(tpl.substring(i));
+                break;
+            }
+            out.append(tpl.substring(i, open));
+            int close = tpl.indexOf("}}", open + 2);
+            if (close < 0) {
+                out.append(tpl.substring(open));
+                break;
+            }
+            String expr = tpl.substring(open + 2, close).trim();
+            if (expr.equals("key") || expr.equals("keyword")) {
+                out.append(encKey);
+            } else if (expr.equals("page")) {
+                out.append(page);
+            } else {
+                String v = com.jianyue.reader.rule.Js.runUrlExpr(expr, keyword, page,
+                        src == null ? "" : src.url);
+                out.append(v == null ? "" : v);
+            }
+            i = close + 2;
+        }
+        return out.toString();
+    }
+
+    /**
+     * Run a source's ruleSearch against an already-fetched body.
+     *
+     * JSON vs HTML is decided by the bookList rule itself (a "$" rule means JSONPath),
+     * which is the same rule style dispatch the rest of the engine uses.
+     */
+    public static List<Books.Book> parseSearchBody(BookSource src, String body) {
+        List<Books.Book> books = new ArrayList<Books.Book>();
+        if (src == null || body == null) {
+            return books;
+        }
+        String listRule = src.searchRules == null ? null : src.searchRules.bookList;
+        if (listRule == null || listRule.length() == 0) {
+            return books;
+        }
+        try {
+            if (listRule.startsWith("$")) {
+                JSONObject root = new JSONObject(body);
+                List<Object> items = com.jianyue.reader.rule.JsonPath.eval(root, listRule);
+                for (int i = 0; i < items.size(); i++) {
+                    Object o = items.get(i);
+                    if (o instanceof JSONArray) {
+                        JSONArray a = (JSONArray) o;
+                        for (int k = 0; k < a.length(); k++) {
+                            Object e = a.opt(k);
+                            if (e instanceof JSONObject) {
+                                books.add(fromJson(src, (JSONObject) e));
+                            }
+                        }
+                    } else if (o instanceof JSONObject) {
+                        books.add(fromJson(src, (JSONObject) o));
+                    }
+                }
+            } else {
+                Html.El doc = Html.parse(body);
+                List<Object> nodes = Rules.getNodes(doc, listRule, Rules.CTX_HTML);
+                for (int i = 0; i < nodes.size(); i++) {
+                    Object node = nodes.get(i);
+                    if (node instanceof Html.El) {
+                        books.add(fromHtml(src, (Html.El) node));
+                    }
+                }
+            }
+        } catch (org.json.JSONException e) {
+            throw new RuntimeException("响应不是合法 JSON（bookList 规则以 $ 开头）: "
+                    + e.getMessage());
+        }
+        return books;
     }
 
     public static Books.SearchResult search(BookSource src, String keyword, int page) {
@@ -127,55 +190,23 @@ public final class Engine {
                 res.error = "该书源未配置搜索地址";
                 return res;
             }
-            String key = URLEncoder.encode(keyword, "UTF-8");
-            String url = src.searchUrl.replace("{{key}}", key)
-                    .replace("{{page}}", String.valueOf(page))
-                    .replace("{{keyword}}", key);
-            url = Rules.absUrl(src.url, url);
-
-            Http.Resp r = Http.getWithHttpFallback(url, src.url, null, src.headers());
+            String url = searchUrlFor(src, keyword, page);
+            Http.Resp r = Http.fetch(url, src.url, src.headers());
             if (!r.ok() || r.code >= 400) {
                 res.error = (r.error != null) ? r.error : ("HTTP " + r.code);
+                res.unreachable = r.unreachable();
                 return res;
             }
             String body = r.text();
             Log.i(TAG, "engine.search " + src.name + " url=" + url
                     + " bytes=" + (r.body == null ? 0 : r.body.length));
 
-            String listRule = src.searchRules.bookList;
+            String listRule = src.searchRules == null ? null : src.searchRules.bookList;
             if (listRule == null || listRule.length() == 0) {
                 res.error = "该书源未配置 bookList 规则";
                 return res;
             }
-
-            // Decide JSON vs HTML from the rule itself, then parse accordingly.
-            if (listRule.startsWith("$")) {
-                JSONObject root = new JSONObject(body);
-                List<Object> items = com.jianyue.reader.rule.JsonPath.eval(root, listRule);
-                for (int i = 0; i < items.size(); i++) {
-                    Object o = items.get(i);
-                    if (o instanceof JSONArray) {
-                        JSONArray a = (JSONArray) o;
-                        for (int k = 0; k < a.length(); k++) {
-                            Object e = a.opt(k);
-                            if (e instanceof JSONObject) {
-                                res.books.add(fromJson(src, (JSONObject) e));
-                            }
-                        }
-                    } else if (o instanceof JSONObject) {
-                        res.books.add(fromJson(src, (JSONObject) o));
-                    }
-                }
-            } else {
-                Html.El doc = Html.parse(body);
-                List<Object> nodes = Rules.getNodes(doc, listRule, Rules.CTX_HTML);
-                for (int i = 0; i < nodes.size(); i++) {
-                    Object node = nodes.get(i);
-                    if (node instanceof Html.El) {
-                        res.books.add(fromHtml(src, (Html.El) node));
-                    }
-                }
-            }
+            res.books = parseSearchBody(src, body);
             Log.i(TAG, "engine.search " + src.name + " -> " + res.books.size() + " books");
             if (res.books.size() == 0) {
                 res.error = "没有解析到结果（检查 bookList 规则）";
@@ -352,7 +383,7 @@ public final class Engine {
             if (url == null || url.length() == 0) {
                 return b;
             }
-            Http.Resp r = Http.getWithHttpFallback(url, src.url, null, src.headers());
+            Http.Resp r = Http.fetch(url, src.url, src.headers());
             if (!r.ok() || r.code >= 400) {
                 Log.i(TAG, "engine.info failed " + url + " " + (r.error != null ? r.error
                         : ("HTTP " + r.code)));
@@ -507,7 +538,7 @@ public final class Engine {
     private static String loadOneTocPage(BookSource src, Books.Book b, String url,
                                          List<Books.Chapter> out) {
         try {
-            Http.Resp r = Http.getWithHttpFallback(url, b.bookUrl, null, src.headers());
+            Http.Resp r = Http.fetch(url, b.bookUrl, src.headers());
             if (!r.ok() || r.code >= 400) {
                 Log.i(TAG, "engine.toc failed " + (r.error != null ? r.error : ("HTTP " + r.code))
                         + " url=" + url);
@@ -645,7 +676,7 @@ public final class Engine {
         // otherwise evaluate against the detail page
         if (bookUrl != null && bookUrl.length() > 0) {
             try {
-                Http.Resp d = Http.getWithHttpFallback(bookUrl, src.url, null, src.headers());
+                Http.Resp d = Http.fetch(bookUrl, src.url, src.headers());
                 if (d.ok() && d.code < 400) {
                     String page = d.text();
                     String found = evalRule(page, r, bookUrl);
@@ -857,11 +888,11 @@ public final class Engine {
      * deliberately keeps its short timeout so dead sites do not stall the whole search.
      */
     private static Http.Resp fetchContentPage(String url, BookSource src) {
-        Http.Resp r = Http.getWithHttpFallback(url, src.url, null, src.headers());
+        Http.Resp r = Http.fetch(url, src.url, src.headers());
         if (r == null || !r.ok() || r.code >= 400) {
             Log.i(TAG, "engine.content retry page " + url
                     + (r == null ? " (null)" : (" (" + r.error + ")")));
-            Http.Resp again = Http.getWithHttpFallback(url, src.url, null, src.headers());
+            Http.Resp again = Http.fetch(url, src.url, src.headers());
             if (again != null && again.ok() && again.code < 400) {
                 return again;
             }

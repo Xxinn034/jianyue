@@ -137,7 +137,7 @@ public final class Rules {
             out = applyReplace(out, pattern, replacement);
         }
         if (putName != null && putName.length() > 0) {
-            PUT_VARS.put(putName, out);
+            putVars().put(putName, out);
         }
         return out == null ? "" : out;
     }
@@ -228,14 +228,14 @@ public final class Rules {
             }
             String v = evalInlineJs(node, expr, ctx, baseUrl);
             if (putName != null && putName.length() > 0) {
-                PUT_VARS.put(putName, v);
+                putVars().put(putName, v);
             }
             return v;
         }
 
         // "@get:name" reads a value captured by a previous "@put:name".
         if (rule.startsWith("@get:")) {
-            String v = PUT_VARS.get(rule.substring(5).trim());
+            String v = putVars().get(rule.substring(5).trim());
             return v == null ? "" : v;
         }
 
@@ -431,16 +431,49 @@ public final class Rules {
     /**
      * Values captured by "@put:name" and read back by "@get:name".
      *
-     * 阅读 keeps these on the rule object, so they live for one analysis pass. This is a
-     * static map, which is safe here because analysis is single-threaded per source and the
-     * map is cleared at the start of each search/detail pass by Engine.
+     * 阅读 keeps these on the rule object, so they live for one analysis pass. Here they are
+     * per-THREAD, not per-process: a search runs many sources in parallel, and a single
+     * shared map let one source's @put overwrite another's between the two halves of a rule
+     * (a rule that puts a value and reads it a step later would read a stranger's value).
+     * Each worker thread analyses its own source, so a ThreadLocal gives every analysis pass
+     * exactly the scope 阅读 gives it.
      */
-    private static final java.util.Map<String, String> PUT_VARS =
-            new java.util.HashMap<String, String>();
+    private static final ThreadLocal<java.util.Map<String, String>> PUT_VARS =
+            new ThreadLocal<java.util.Map<String, String>>() {
+                protected java.util.Map<String, String> initialValue() {
+                    return new java.util.HashMap<String, String>();
+                }
+            };
+
+    private static java.util.Map<String, String> putVars() {
+        return PUT_VARS.get();
+    }
 
     /** Clear @put/@get variables. Call once per analysis pass. */
     public static void resetPutVars() {
-        PUT_VARS.clear();
+        putVars().clear();
+    }
+
+    /**
+     * Read/write one @put variable.
+     *
+     * Exposed so the JS host (java.put / java.get / source.getVariable) uses the SAME store
+     * as the rule engine: a source that does `java.put('token', x)` and then reads it in a
+     * later rule with `@get:token` must see the value. Two stores would produce an empty
+     * field and no error.
+     */
+    public static String getVar(String name) {
+        if (name == null) {
+            return "";
+        }
+        String v = putVars().get(name);
+        return v == null ? "" : v;
+    }
+
+    public static void putVar(String name, String value) {
+        if (name != null && name.length() > 0) {
+            putVars().put(name, value == null ? "" : value);
+        }
     }
 
     /**

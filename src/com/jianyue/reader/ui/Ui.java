@@ -6,11 +6,13 @@ import android.graphics.drawable.ColorDrawable;
 import android.util.Log;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowManager;
 import android.widget.ImageView;
 import android.widget.TextView;
 
 import com.jianyue.reader.R;
 import com.jianyue.reader.model.Books;
+import com.jianyue.reader.util.Compat;
 
 /**
  * Shared window + bottom-tab-bar setup for every screen.
@@ -36,6 +38,16 @@ import com.jianyue.reader.model.Books;
  * task root and is never finished), so the stack stays at most 书架 + one page: back from
  * 书源/本地导入 returns to the shelf, and tapping the launcher icon after Home resumes the
  * shelf instead of creating a second task.
+ *
+ * ANIMATION
+ * ---------
+ * Switching pages used to move the screen up and down: with no android:theme in the
+ * manifest the platform picks its own default theme, and the Material activity animation it
+ * carries ("activity_open_enter") fades the arriving page in *while rising it by 6% of the
+ * screen height*, which reads as a jump on a page that is all list. The three tab pages
+ * therefore carry style TabAnim (res/anim/tab_*), i.e. a plain left/right slide, set on the
+ * window in tabs() and - on API 5+ - again per tap in switchTo() so the slide follows the
+ * bar (right for 书源/本地导入, left for 书架).
  */
 final class Ui {
 
@@ -121,6 +133,28 @@ final class Ui {
         }
 
         hostTap(a, item, current);
+        windowAnimation(a);
+    }
+
+    /**
+     * Give this page the horizontal tab animation (style TabAnim) instead of whatever the
+     * platform's default theme would play.
+     *
+     * Written through the LayoutParams field rather than Window.setWindowAnimations(),
+     * because that method only exists from API 5 on while the field has been public since
+     * API 1 - one code path for every platform. The window is not attached to the window
+     * manager yet at this point (that happens after onResume), so this value is the one WMS
+     * gets, and it also settles the animation of the page being LEFT: WMS reads the exit
+     * animation from the leaving window's own attributes, not from the arriving one's.
+     */
+    private static void windowAnimation(Activity a) {
+        try {
+            WindowManager.LayoutParams lp = a.getWindow().getAttributes();
+            lp.windowAnimations = R.style.TabAnim;
+            Log.i(TAG, "anim: windowAnimations=0x" + Integer.toHexString(lp.windowAnimations));
+        } catch (Throwable t) {
+            Log.i(TAG, "anim: cannot set the tab window animation: " + t);
+        }
     }
 
     /** Start the page for a tab the user tapped, and drop the page they left. */
@@ -134,6 +168,15 @@ final class Ui {
             i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         }
         a.startActivity(i);
+        // Which way the slide goes: the bar is 书架 / 书源 / 本地导入, so moving right in the
+        // bar means the arriving page comes in from the right. One-shot and API 5+ only
+        // (Compat); everywhere else style TabAnim decides, which is the same left/right
+        // slide with the open/close default of "in from the right / out to the right".
+        boolean back = to < from;
+        boolean over = Compat.overrideTransition(a,
+                back ? R.anim.tab_in_left : R.anim.tab_in_right,
+                back ? R.anim.tab_out_right : R.anim.tab_out_left);
+        Log.i(TAG, "anim: tab " + (back ? "back" : "forward") + " override=" + over);
         // The root is never finished, so the task keeps exactly one root and an app icon tap
         // after Home resumes the shelf we already have. Leaving it alive is also what makes
         // back from 书源/本地导入 return to the shelf rather than leave the app.
