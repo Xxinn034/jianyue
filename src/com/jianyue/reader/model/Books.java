@@ -71,6 +71,12 @@ public final class Books {
         public String title = "";
         public String content = "";
         public String nextUrl = "";
+        /**
+         * Why no text was produced (fetch failure, missing rule, rule matched nothing).
+         * Null when the chapter loaded. Callers use this instead of string-matching the
+         * "（正文为空…）" placeholder to decide whether trying another source is worthwhile.
+         */
+        public String error;
     }
 
     /** Result of one source's search. */

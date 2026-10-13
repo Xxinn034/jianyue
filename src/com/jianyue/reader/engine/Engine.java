@@ -140,7 +140,10 @@ public final class Engine {
             return books;
         }
         try {
-            if (listRule.startsWith("$")) {
+            // The body decides JSON vs HTML, not just the rule: a 阅读 source may write a
+            // JSON list rule as a bare "data.list" (百度小说 does), which is otherwise
+            // indistinguishable from a CSS selector. See Rules.looksLikeJson.
+            if (listRule.startsWith("$") || com.jianyue.reader.rule.Rules.looksLikeJson(body)) {
                 JSONObject root = new JSONObject(body);
                 List<Object> items = com.jianyue.reader.rule.JsonPath.eval(root, listRule);
                 for (int i = 0; i < items.size(); i++) {
@@ -269,32 +272,14 @@ public final class Engine {
         return Rules.absUrl(src.url, out);
     }
 
-    /** Replace {$.a.b} / {$.a} placeholders with values from a JSON item. */
+    /**
+     * Replace {$.a.b} / {$.a} placeholders with values from a JSON item.
+     *
+     * Delegates to the rule engine so there is one implementation of the substitution
+     * (see {@link com.jianyue.reader.rule.Rules#substituteJsonFields}).
+     */
     public static String substituteJson(String template, JSONObject item) {
-        if (template == null || item == null) {
-            return template == null ? "" : template;
-        }
-        StringBuilder sb = new StringBuilder();
-        int i = 0;
-        int n = template.length();
-        while (i < n) {
-            int open = template.indexOf("{$.", i);
-            if (open < 0) {
-                sb.append(template.substring(i));
-                break;
-            }
-            sb.append(template.substring(i, open));
-            int close = template.indexOf('}', open);
-            if (close < 0) {
-                sb.append(template.substring(open));
-                break;
-            }
-            String path = template.substring(open + 1, close);   // "$.a.b"
-            String v = com.jianyue.reader.rule.JsonPath.firstString(item, path);
-            sb.append(v);
-            i = close + 1;
-        }
-        return sb.toString();
+        return com.jianyue.reader.rule.Rules.substituteJsonFields(template, item);
     }
 
     private static String clean(String s) {
@@ -320,12 +305,20 @@ public final class Engine {
      * Routing through Rules.getString() keeps plain JSONPath behaviour (getString dispatches
      * "$..." to the same JsonPath code) and adds <js>, ##replace and the rule combinators.
      */
+    /**
+     * Resolve one rule against a whole response body.
+     *
+     * JSON vs HTML is decided by the BODY (see {@link com.jianyue.reader.rule.Rules#looksLikeJson}),
+     * falling back to the rule's own syntax, so a JSON content rule written without the
+     * leading "$" still works.
+     */
     private static String evalRule(String body, String rule, String baseUrl) {
         if (rule == null || rule.trim().length() == 0) {
             return "";
         }
         try {
-            if (rule.trim().startsWith("$")) {
+            if (rule.trim().startsWith("$")
+                    || com.jianyue.reader.rule.Rules.looksLikeJson(body)) {
                 return Rules.getString(new JSONObject(body), rule, Rules.CTX_JSON, baseUrl);
             }
             return Rules.getString(Html.parse(body), rule, Rules.CTX_HTML, baseUrl);
@@ -505,20 +498,48 @@ public final class Engine {
             // A 目录 can span several pages. ruleToc.nextTocUrl names the next one (usually a
             // "下一页" link), and each page is appended in order; without this a source like
             // 新笔趣阁 returns only its first 100 chapters, which looks like a truncated book.
+            //
+            // A page can yield SEVERAL next URLs at once (a JS rule that computes every
+            // remaining page from the total chapter count, as 百度小说 does: 433 chapters at
+            // 50 per page), so the loop works off a queue rather than one chained URL.
+            List<String> pending = new ArrayList<String>();
             List<String> seen = new ArrayList<String>();
+            String cur = url;
             int guard = 0;
-            while (url != null && url.length() > 0 && guard < 20) {
+            while ((cur != null && cur.length() > 0 || pending.size() > 0) && guard < 20) {
+                if (cur == null || cur.length() == 0) {
+                    cur = pending.remove(0);
+                }
                 guard++;
-                if (seen.contains(url)) {
+                if (seen.contains(cur)) {
+                    cur = "";
+                    continue;
+                }
+                seen.add(cur);
+                String nextRaw = loadOneTocPage(src, b, cur, out);
+                if (out.size() == 0) {
                     break;
                 }
-                seen.add(url);
-                String next = loadOneTocPage(src, b, url, out);
-                if (out.size() > 0 && next != null && next.length() > 0
-                        && !next.equals(url)) {
-                    url = Rules.absUrl(url, next);
-                } else {
-                    break;
+                String from = cur;
+                cur = "";
+                if (nextRaw != null && nextRaw.length() > 0) {
+                    // Several URLs may come back at once (see loadOneTocPage).
+                    String[] parts = nextRaw.split("\n");
+                    for (int i = 0; i < parts.length; i++) {
+                        String n = parts[i].trim();
+                        if (n.length() == 0) {
+                            continue;
+                        }
+                        String abs = (n.indexOf("://") > 0) ? n : Rules.absUrl(from, n);
+                        if (pending.contains(abs) || seen.contains(abs)) {
+                            continue;
+                        }
+                        if (cur.length() == 0) {
+                            cur = abs;
+                        } else {
+                            pending.add(abs);
+                        }
+                    }
                 }
             }
             Log.i(TAG, "engine.toc " + b.name + " -> " + out.size() + " chapters ("
@@ -533,7 +554,9 @@ public final class Engine {
     /**
      * Load ONE 目录 page, appending its chapters to {@code out}.
      *
-     * @return the URL of the next page, or "" when this was the last one.
+     * @return the next page URL(s), newline separated ("" when this was the last page).
+     *         More than one URL happens with a JS rule that derives every remaining page from
+     *         the total chapter count instead of linking to one "next page".
      */
     private static String loadOneTocPage(BookSource src, Books.Book b, String url,
                                          List<Books.Chapter> out) {
@@ -567,11 +590,12 @@ public final class Engine {
             List<String> urls;
             List<Boolean> vips = new ArrayList<Boolean>();
 
-            if (listRule.startsWith("$")) {
+            if (listRule.startsWith("$") || Rules.looksLikeJson(body)) {
                 JSONObject root = new JSONObject(body);
                 List<Object> items = Rules.getNodes(root, listRule, Rules.CTX_JSON);
                 names = pickField(items, rr.chapterName, src.url);
                 urls = pickField(items, rr.chapterUrl, src.url);
+                logTocNodes(listRule, items.size(), body, true);
             } else {
                 Html.El doc = Html.parse(body);
                 List<Object> items = Rules.getNodes(doc, listRule, Rules.CTX_HTML);
@@ -588,6 +612,7 @@ public final class Engine {
                         vips.add(Boolean.valueOf(vip != null && vip.length() > 0));
                     }
                 }
+                logTocNodes(listRule, items.size(), body, false);
             }
 
             int n = Math.min(names.size(), urls.size());
@@ -611,12 +636,48 @@ public final class Engine {
             // resolve the "next 目录 page" rule against THIS page
             if (rr.nextTocUrl != null && rr.nextTocUrl.length() > 0) {
                 try {
-                    String nx = evalRule(body, rr.nextTocUrl, url);
+                    String rule = rr.nextTocUrl.trim();
+                    String nx;
+                    if (rule.startsWith("@js:") || rule.startsWith("<js>")) {
+                        // A JS next-page rule computes the remaining URLs from the WHOLE
+                        // response - 百度小说 derives all 8 remaining pages from
+                        // JSON.parse(result).data.chapter.chapterCount - so `result` has to be
+                        // the raw body. Running it through the rule evaluator handed the script
+                        // an HTML-parsed fragment instead, it threw, and the 目录 stopped at the
+                        // first 50 of 433 chapters.
+                        //
+                        // The "js:"/"@js:"/"<js>" marker itself is NOT JavaScript: passing the
+                        // rule through with its prefix made Rhino fail on the very first token
+                        // and return "", which looked exactly like "this source has one page".
+                        String script = rule;
+                        if (script.startsWith("@js:")) {
+                            script = script.substring(4);
+                        } else if (script.startsWith("js:")) {
+                            script = script.substring(3);
+                        } else if (script.startsWith("<js>")) {
+                            script = script.substring(4);
+                            int close = script.lastIndexOf("</js>");
+                            if (close >= 0) {
+                                script = script.substring(0, close);
+                            }
+                        }
+                        nx = com.jianyue.reader.rule.Js.run(script, body, url, null);
+                    } else {
+                        nx = evalRule(body, rule, url);
+                    }
                     // "1/2" and a link back to the current page both mean "no next page"
                     if (nx != null && nx.length() > 0 && !nx.equals("下一页")
                             && !nx.equals("下页") && !nx.equals(url)
                             && !nx.equals(Rules.absUrl(url, nx))) {
-                        nextToc = nx;
+                        // A JS rule that returns an ARRAY comes back as "[\"u1\", \"u2\"]" or as
+                        // Rhino's plain "u1,u2"; reduce either to newline-separated URLs so the
+                        // caller can queue them.
+                        nextToc = normalizeNextToc(nx, url);
+                    }
+                    if (nextToc.length() == 0) {
+                        Log.i(TAG, "engine.toc nextTocUrl -> none (raw="
+                                + (nx == null ? -1 : nx.length()) + ") rule=["
+                                + preview(rule) + "]");
                     }
                 } catch (Throwable t) {
                     Log.i(TAG, "engine.toc nextTocUrl failed: " + t.getMessage());
@@ -630,6 +691,68 @@ public final class Engine {
             Log.i(TAG, "engine.toc page error " + t.getClass().getName() + ": " + t.getMessage());
             return "";
         }
+    }
+
+    /**
+     * Turn a next-page rule result into newline-separated URLs.
+     *
+     * A JS rule may return a single URL, an array (["u1","u2"]), or an array joined by Rhino's
+     * default toString ("u1,u2"). All three mean "these are the pages after this one", so they
+     * are reduced to one form here rather than in the caller.
+     */
+    private static String normalizeNextToc(String nx, String currentUrl) {
+        if (nx == null) {
+            return "";
+        }
+        String t = nx.trim();
+        if (t.length() == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        if (t.charAt(0) == '[') {
+            try {
+                org.json.JSONArray a = new org.json.JSONArray(t);
+                for (int i = 0; i < a.length(); i++) {
+                    String v = a.optString(i, "").trim();
+                    if (v.length() > 0) {
+                        if (sb.length() > 0) {
+                            sb.append('\n');
+                        }
+                        sb.append(v);
+                    }
+                }
+                return sb.toString();
+            } catch (Throwable ignored) {
+                // not strict JSON: fall through to the comma form
+            }
+            t = t.substring(1);
+            if (t.length() > 0 && t.charAt(t.length() - 1) == ']') {
+                t = t.substring(0, t.length() - 1);
+            }
+        }
+        if (t.indexOf(',') < 0) {
+            return t;
+        }
+        // Only treat a comma as a URL separator when the pieces look like URLs or paths;
+        // a query string of its own ("?page=2,3") must survive intact.
+        String[] parts = t.split(",");
+        if (parts.length < 2) {
+            return t;
+        }
+        for (int i = 0; i < parts.length; i++) {
+            String p = parts[i].trim().replace("\"", "").replace("'", "");
+            if (p.length() == 0) {
+                continue;
+            }
+            if (p.indexOf("://") < 0 && p.indexOf('/') < 0 && p.indexOf('.') < 0) {
+                return t;               // not URL-shaped: leave it alone
+            }
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(p);
+        }
+        return sb.toString();
     }
 
     /**
@@ -849,6 +972,13 @@ public final class Engine {
                     break;
                 }
                 String piece = evalRule(body, contentRule, url);
+                if (piece == null || piece.length() == 0) {
+                    // Say WHY a 正文 came back empty: an unreachable-looking page, the wrong
+                    // rule style, or a rule that simply does not match this response.
+                    Log.i(TAG, "engine.content empty: rule=[" + contentRule + "] url=" + url
+                            + " bodyType=" + (Rules.looksLikeJson(body) ? "json" : "html")
+                            + " len=" + body.length() + " head=[" + preview(body) + "]");
+                }
                 if (piece != null && piece.length() > 0) {
                     text.append(piece).append('\n');
                 }
@@ -871,11 +1001,50 @@ public final class Engine {
         }
         out.content = Rules.cleanText(text.toString());
         if (out.content.length() == 0) {
-            out.content = "（正文为空" + (lastError != null ? "：" + lastError : "") + "）";
+            out.error = (lastError != null) ? lastError : "正文规则没有匹配到内容";
+            out.content = "（正文为空：" + out.error + "）";
         }
         Log.i(TAG, "engine.content " + chapter.name + " -> " + out.content.length() + " chars"
                 + " head=[" + preview(out.content) + "]");
         return out;
+    }
+
+    /**
+     * Log the chapter-list rule and what it matched.
+     *
+     * "-> 0 rows" alone cannot distinguish the four ways a 目录 comes back empty: the page
+     * was not what the rule expects, the rule was evaluated in the wrong mode, the JSON key
+     * moved, or the request never returned the body at all. This prints enough to tell them
+     * apart (the rule, the body's first bytes, and - for JSON - the top-level keys) without
+     * dumping a whole page into logcat.
+     */
+    private static void logTocNodes(String listRule, int count, String body, boolean json) {
+        if (count > 0) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder("engine.toc 0 rows: rule=[");
+        sb.append(listRule).append("] json=").append(json);
+        sb.append(" len=").append(body == null ? 0 : body.length());
+        if (body != null && body.length() > 0) {
+            sb.append(" head=[").append(preview(body)).append("]");
+        }
+        if (json && body != null && body.length() > 0) {
+            try {
+                JSONObject o = new JSONObject(body);
+                StringBuilder keys = new StringBuilder();
+                java.util.Iterator<?> it = o.keys();
+                while (it.hasNext() && keys.length() < 200) {
+                    if (keys.length() > 0) {
+                        keys.append(',');
+                    }
+                    keys.append(String.valueOf(it.next()));
+                }
+                sb.append(" topKeys=[").append(keys).append("]");
+            } catch (Throwable t) {
+                sb.append(" not-json=").append(t.getClass().getSimpleName());
+            }
+        }
+        Log.i(TAG, sb.toString());
     }
 
     /**

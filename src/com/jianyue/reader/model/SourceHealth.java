@@ -57,6 +57,16 @@ public final class SourceHealth {
         public long lastOkMs;
         public long lastTryMs;
         public long avgMs;
+        /**
+         * How often this source's 目录 came back with chapters. Search and 目录 are two
+         * different rules against two different pages: a source can answer the search
+         * perfectly and still be unable to serve the book, which is exactly the case that
+         * leaves the user staring at an empty 目录 after tapping a search result. This
+         * counter is what lets the app prefer a source that is known to DELIVER content.
+         */
+        public int readOk;
+        /** How often the source was opened and produced no chapters (empty 目录 / dead page). */
+        public int readFail;
     }
 
     private SourceHealth() {
@@ -116,6 +126,59 @@ public final class SourceHealth {
             return 2;
         }
         return 1;
+    }
+
+    /**
+     * Order used when choosing between the several sources that offered the same book
+     * (自动换源 / 默认来源): sources that have actually produced chapters come first, then
+     * sources that answered a search, then the untried, and last the ones whose 目录 has
+     * failed more often than it has worked.
+     *
+     * Reading is not searching, and this is the only place that distinction is made.
+     */
+    public static int rankForReading(String sourceUrl) {
+        if (sourceUrl == null || sourceUrl.length() == 0) {
+            return 3;
+        }
+        Rec r = MAP.get(sourceUrl);
+        if (r == null) {
+            return 2;                       // never opened: better than known-empty
+        }
+        if (r.readOk > 0) {
+            return 0;
+        }
+        if (r.readFail > 0 && r.readFail >= r.readOk + BAD_AFTER) {
+            return 4;                       // opened repeatedly, never had chapters
+        }
+        if (r.ok > 0) {
+            return 1;                       // search works; 目录 unknown
+        }
+        if (r.fail >= BAD_AFTER) {
+            return 3;
+        }
+        return 2;
+    }
+
+    /**
+     * Record whether opening a source's 目录 produced chapters.
+     *
+     * Called from the two places that know the answer (the detail screen and the reader), so
+     * "this source cannot serve books" is learned once instead of once per tapped result.
+     */
+    public static synchronized void recordRead(String sourceUrl, boolean chapters) {
+        if (sourceUrl == null || sourceUrl.length() == 0) {
+            return;
+        }
+        Rec r = MAP.get(sourceUrl);
+        if (r == null) {
+            r = new Rec();
+            MAP.put(sourceUrl, r);
+        }
+        if (chapters) {
+            r.readOk++;
+        } else {
+            r.readFail++;
+        }
     }
 
     /** Stable ordering used by the search: best-known sources first, name as tiebreaker. */
@@ -211,6 +274,8 @@ public final class SourceHealth {
                 r.lastOkMs = o.optLong("lastOk", 0);
                 r.lastTryMs = o.optLong("lastTry", 0);
                 r.avgMs = o.optLong("avg", 0);
+                r.readOk = o.optInt("readOk", 0);
+                r.readFail = o.optInt("readFail", 0);
                 MAP.put(key, r);
             }
             Log.i(TAG, "health: loaded " + MAP.size() + " records");
@@ -237,6 +302,8 @@ public final class SourceHealth {
                 o.put("lastOk", r.lastOkMs);
                 o.put("lastTry", r.lastTryMs);
                 o.put("avg", r.avgMs);
+                o.put("readOk", r.readOk);
+                o.put("readFail", r.readFail);
                 root.put(e.getKey(), o);
             }
             FileOutputStream fos = null;
