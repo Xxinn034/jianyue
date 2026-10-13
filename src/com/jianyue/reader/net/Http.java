@@ -245,7 +245,12 @@ public final class Http {
     // (the user only has to wait for the next search to start, not restart the app).
 
     private static final long DEAD_TTL_MS = 5 * 60 * 1000L;       // refused / unreachable
-    private static final long SLOW_TTL_MS = 90 * 1000L;           // connect timed out
+    /**
+     * A host whose connect TIMED OUT. Kept as long as a refused one: a search tries each
+     * host once, and re-paying the connect timeout for the same slow host on the very next
+     * search (90s was short enough for that) is exactly the cost this cache exists to avoid.
+     */
+    private static final long SLOW_TTL_MS = 5 * 60 * 1000L;
     private static final long HTTPS_BROKEN_TTL_MS = 30 * 60 * 1000L;
 
     private static final Map<String, Long> DEAD_HOSTS =
@@ -361,15 +366,23 @@ public final class Http {
     /** As above, carrying a book source's extra headers through both attempts. */
     public static Resp getWithHttpFallback(String url, String referer, String ua,
                                            java.util.Map<String, String> extra) {
+        return getWithHttpFallback(url, referer, ua, extra, CONNECT_TIMEOUT_MS);
+    }
+
+    /** As above, with a caller-chosen connect timeout (search uses a shorter one). */
+    public static Resp getWithHttpFallback(String url, String referer, String ua,
+                                           java.util.Map<String, String> extra,
+                                           int connectTimeoutMs) {
         if (url == null) {
-            return request(null, "GET", null, referer, ua, CONNECT_TIMEOUT_MS,
+            return request(null, "GET", null, referer, ua, connectTimeoutMs,
                     READ_TIMEOUT_MS, extra);
         }
         // If this host already proved to be HTTP-only, skip the doomed HTTPS attempt
         // entirely. Without this, every request to such a site pays a TLS timeout first.
         if (isKnownHttpOnly(url) && url.startsWith("https://")) {
             String httpUrl = "http://" + url.substring("https://".length());
-            Resp r = get(httpUrl, referer, ua, extra);
+            Resp r = request(httpUrl, "GET", null, referer, ua, connectTimeoutMs,
+                    READ_TIMEOUT_MS, extra);
             if (r.ok() && r.code < 400) {
                 return r;
             }
@@ -378,20 +391,23 @@ public final class Http {
         // straight to http turns a timeout into one failed request.
         if (httpsBroken(url) && url.startsWith("https://")) {
             String httpUrl = "http://" + url.substring("https://".length());
-            Resp r = get(httpUrl, referer, ua, extra);
+            Resp r = request(httpUrl, "GET", null, referer, ua, connectTimeoutMs,
+                    READ_TIMEOUT_MS, extra);
             if (r.ok() && r.code < 400) {
                 markHttpOnly(url);
                 return r;
             }
         }
-        Resp r = get(url, referer, ua, extra);
+        Resp r = request(url, "GET", null, referer, ua, connectTimeoutMs, READ_TIMEOUT_MS,
+                extra);
         if (r.ok() && r.code < 400) {
             return r;
         }
         if (url.startsWith("https://")) {
             String httpUrl = "http://" + url.substring("https://".length());
             Log.i(TAG, "net: https failed (" + describeFailure(r) + "), retrying over http: " + httpUrl);
-            Resp r2 = get(httpUrl, referer, ua, extra);
+            Resp r2 = request(httpUrl, "GET", null, referer, ua, connectTimeoutMs,
+                    READ_TIMEOUT_MS, extra);
             if (r2.ok() && r2.code < 400) {
                 markHttpOnly(url);
                 return r2;
@@ -425,6 +441,22 @@ public final class Http {
      */
     public static Resp fetch(String urlWithOptions, String referer,
                              java.util.Map<String, String> sourceHeaders) {
+        return fetch(urlWithOptions, referer, sourceHeaders, CONNECT_TIMEOUT_MS);
+    }
+
+    /**
+     * As above, with a caller-chosen connect timeout.
+     *
+     * A SEARCH is speculative - it tries hundreds of sources and only a handful of them
+     * matter - while a 目录 or 正文 request is one the user is waiting on and has to succeed.
+     * Spending the same 8 seconds of connect timeout on "a site that is probably dead
+     * anyway" is what made a 227-source search take nearly two minutes of pure waiting, so
+     * the search asks for a shorter one (see SearchJob.SEARCH_CONNECT_TIMEOUT_MS) and every
+     * other caller keeps the default.
+     */
+    public static Resp fetch(String urlWithOptions, String referer,
+                             java.util.Map<String, String> sourceHeaders,
+                             int connectTimeoutMs) {
         UrlOptions o = UrlOptions.parse(urlWithOptions);
         if (o.url.length() == 0) {
             Resp bad = new Resp();
@@ -443,9 +475,9 @@ public final class Http {
         }
         Resp r;
         if (o.isPost()) {
-            r = requestWithFallback(o, referer, headers);
+            r = requestWithFallback(o, referer, headers, connectTimeoutMs);
         } else {
-            r = getWithHttpFallback(o.url, referer, null, headers);
+            r = getWithHttpFallback(o.url, referer, null, headers, connectTimeoutMs);
         }
         // A source-declared charset beats both the Content-Type header and our detector:
         // 阅读 sources write it precisely because the site lies about its encoding.
@@ -457,10 +489,11 @@ public final class Http {
 
     /** POST (or any other verb) with the same https -> http retry the GET path has. */
     private static Resp requestWithFallback(UrlOptions o, String referer,
-                                            java.util.Map<String, String> headers) {
+                                            java.util.Map<String, String> headers,
+                                            int connectTimeoutMs) {
         byte[] body = encodeBody(o.body, o.charset);
         Resp r = requestBytes(o.url, o.method, body, referer, null,
-                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, headers);
+                connectTimeoutMs, READ_TIMEOUT_MS, headers);
         if (r.ok() && r.code < 400) {
             return r;
         }
@@ -469,7 +502,7 @@ public final class Http {
             Log.i(TAG, "net: " + o.method + " https failed (" + describeFailure(r)
                     + "), retrying over http: " + httpUrl);
             Resp r2 = requestBytes(httpUrl, o.method, body, referer, null,
-                    CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, headers);
+                    connectTimeoutMs, READ_TIMEOUT_MS, headers);
             if (r2.ok() && r2.code < 400) {
                 markHttpOnly(o.url);
                 return r2;

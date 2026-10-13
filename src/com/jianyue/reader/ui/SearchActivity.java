@@ -82,6 +82,7 @@ public class SearchActivity extends Activity {
         static String keyword = "";
         static boolean stopped;
         static final List<Books.Book> books = new ArrayList<Books.Book>();
+        /** Every merged book, in no particular order. {@link #results()} decides display order. */
         static final List<SourceSwitcher.Group> groups = new ArrayList<SourceSwitcher.Group>();
         static final List<String> failures = new ArrayList<String>();
         /** title key -> group, for incremental merging while results stream in. */
@@ -102,6 +103,71 @@ public class SearchActivity extends Activity {
         static int groupCount() {
             synchronized (books) {
                 return groups.size();
+            }
+        }
+
+        /**
+         * What the list shows, in the order it should be read.
+         *
+         * Ordering by RELEVANCE, not by arrival. Results stream in from whichever source
+         * answers first, so raw order means "the first site that came back" - which is how a
+         * search for 诡舍 ends up with 都市神王录 on the first row (a source that dumps its
+         * whole catalogue) while the book the user typed sits third. The searched title
+         * always comes first; the rest follow from the best source that offered them.
+         */
+        static List<SourceSwitcher.Group> results() {
+            List<SourceSwitcher.Group> all;
+            synchronized (books) {
+                all = new ArrayList<SourceSwitcher.Group>(groups);
+            }
+            List<SourceSwitcher.Group> exact = new ArrayList<SourceSwitcher.Group>();
+            List<SourceSwitcher.Group> rest = new ArrayList<SourceSwitcher.Group>();
+            for (int i = 0; i < all.size(); i++) {
+                SourceSwitcher.Group g = all.get(i);
+                if (SourceSwitcher.titleMatches(g.name, keyword)) {
+                    exact.add(g);
+                } else {
+                    rest.add(g);
+                }
+            }
+            sortByQuality(exact);
+            sortByQuality(rest);
+            exact.addAll(rest);
+            return exact;
+        }
+
+        /** Best-placed source first; then the book offered by more sources; then by title. */
+        private static void sortByQuality(List<SourceSwitcher.Group> list) {
+            try {
+                java.util.Collections.sort(list, new java.util.Comparator<SourceSwitcher.Group>() {
+                    public int compare(SourceSwitcher.Group a, SourceSwitcher.Group b) {
+                        int ra = a.bestRank();
+                        int rb = b.bestRank();
+                        if (ra != rb) {
+                            return ra - rb;
+                        }
+                        if (a.size() != b.size()) {
+                            return b.size() - a.size();
+                        }
+                        return a.name.compareTo(b.name);
+                    }
+                });
+            } catch (Throwable ignored) {
+            }
+        }
+
+        /**
+         * Sources that have actually served content move to the front of their book's
+         * candidate list. A book found on twenty sources is only as good as the source the
+         * row opens with, and searching says nothing about serving.
+         */
+        private static void pickBestSource(SourceSwitcher.Group g) {
+            List<SourceSwitcher.SrcBook> ranked = SourceSwitcher.ranked(g);
+            for (int i = 0; i < ranked.size(); i++) {
+                if (ranked.get(i) != g.current()) {
+                    g.select(g.items.indexOf(ranked.get(i)));
+                    return;
+                }
             }
         }
 
@@ -180,7 +246,7 @@ public class SearchActivity extends Activity {
 
         // Re-attach to a search that is running or already finished: this is what keeps the
         // results on screen across a rotation.
-        if (State.running || State.groups.size() > 0) {
+        if (State.running || State.groupCount() > 0) {
             input.setText(State.keyword);
             if (State.running) {
                 go.setText("停止");
@@ -205,7 +271,7 @@ public class SearchActivity extends Activity {
         super.onResume();
         // a search may have completed while this activity was in the background, or a source
         // may have been switched downstream (which moves the group's current source)
-        if (!State.running && State.groups.size() > 0) {
+        if (!State.running && State.groupCount() > 0) {
             applyResults();
         }
     }
@@ -268,7 +334,7 @@ public class SearchActivity extends Activity {
                             public boolean cancelled() {
                                 return State.stop;
                             }
-                        }, SearchJob.DEFAULT_BUDGET_MS);
+                        }, SearchJob.budgetMs());
                 handler.post(new Runnable() {
                     public void run() {
                         State.failures.clear();
@@ -276,7 +342,14 @@ public class SearchActivity extends Activity {
                         State.books.clear();
                         State.books.addAll(found);
                         State.running = false;
-                        SourceSwitcher.register(State.snapshotGroups());
+                        // The search is over, so the ordering can change without moving a row
+                        // the user is about to tap: promote the sources known to serve
+                        // content, then let the list settle into relevance order.
+                        List<SourceSwitcher.Group> all = State.snapshotGroups();
+                        for (int i = 0; i < all.size(); i++) {
+                            State.pickBestSource(all.get(i));
+                        }
+                        SourceSwitcher.register(all);
                         go.setText("搜索");
                         go.setEnabled(true);
                         applyResults();
@@ -285,6 +358,7 @@ public class SearchActivity extends Activity {
                                 + failures.size() + " done=" + State.done + "/" + State.total
                                 + " skippedHost=" + State.skipped + " stopped=" + State.stopped
                                 + " ms=" + (System.currentTimeMillis() - t0));
+                        Log.i(TAG, "search top: " + topTitles());
                     }
                 });
             }
@@ -323,9 +397,32 @@ public class SearchActivity extends Activity {
                 if (State.running) {
                     updateStatus();
                 }
-                adapter.setItems(State.snapshotGroups());
+                adapter.setItems(State.results());
             }
         });
+    }
+
+    /**
+     * First few rows as the user sees them, with the source each row would open with.
+     * Written once per search so a verification run can assert on the ORDER, which is the
+     * part of this screen that is otherwise invisible to a script.
+     */
+    private static String topTitles() {
+        List<SourceSwitcher.Group> shown = State.results();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < shown.size() && i < 6; i++) {
+            SourceSwitcher.Group g = shown.get(i);
+            SourceSwitcher.SrcBook cur = g.current();
+            if (i > 0) {
+                sb.append(" | ");
+            }
+            sb.append(i + 1).append('.').append(g.name);
+            if (cur != null) {
+                sb.append('[').append(cur.sourceName).append(']');
+            }
+            sb.append('/').append(g.size()).append("源");
+        }
+        return sb.toString();
     }
 
     /** Merge one book into the group list, creating the group on first sight. */
@@ -373,7 +470,7 @@ public class SearchActivity extends Activity {
     }
 
     private void applyResults() {
-        adapter.setItems(State.snapshotGroups());
+        adapter.setItems(State.results());
         int groups = State.groupCount();
         StringBuilder sb = new StringBuilder();
         sb.append("找到 ").append(groups).append(" 本");

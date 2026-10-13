@@ -19,6 +19,7 @@ import com.jianyue.reader.engine.Engine;
 import com.jianyue.reader.model.BookSource;
 import com.jianyue.reader.model.Books;
 import com.jianyue.reader.model.ProgressStore;
+import com.jianyue.reader.model.SourceHealth;
 import com.jianyue.reader.model.SourceStore;
 import com.jianyue.reader.model.SourceSwitcher;
 
@@ -221,11 +222,38 @@ public class BookDetailActivity extends Activity {
             public void run() {
                 // fill in anything the search row did not provide
                 Engine.loadBookInfo(src, b);
-                final List<Books.Chapter> got = Engine.loadToc(src, b);
+                List<Books.Chapter> got = Engine.loadToc(src, b);
+                SourceHealth.recordRead(src.url, got.size() > 0);
+                // 自动换源: the source this result opened with answered the SEARCH but cannot
+                // serve the book (empty 目录 / dead page). The merged search already knows
+                // which sources this book came from, so try them here instead of leaving the
+                // user on a screen with no chapters and no explanation. The candidate order
+                // is SourceSwitcher.ranked(), i.e. sources that have produced chapters before.
+                final BookSource alt = (got.size() == 0) ? firstWorkingAlternative(src, b) : null;
+                if (alt != null) {
+                    Books.Book altBook = altBookFor(alt);
+                    if (altBook != null) {
+                        Engine.loadBookInfo(alt, altBook);
+                        List<Books.Chapter> altToc = Engine.loadToc(alt, altBook);
+                        SourceHealth.recordRead(alt.url, altToc.size() > 0);
+                        if (altToc.size() > 0) {
+                            got = altToc;
+                            final Books.Book fb = altBook;
+                            final BookSource fs = alt;
+                            final int fi = indexInGroup(fs);
+                            handler.post(new Runnable() {
+                                public void run() {
+                                    adoptSource(fs, fb, fi, "已自动换源：" + fs.name);
+                                }
+                            });
+                        }
+                    }
+                }
+                final List<Books.Chapter> fgot = got;
                 handler.post(new Runnable() {
                     public void run() {
                         toc.clear();
-                        toc.addAll(got);
+                        toc.addAll(fgot);
                         adapter.notifyDataSetChanged();
                         tocCount.setText(toc.size() + " 章");
                         updateInfoMeta();
@@ -238,14 +266,106 @@ public class BookDetailActivity extends Activity {
                                     com.jianyue.reader.R.id.detail_title)).setText(b.name);
                         }
                         if (toc.size() == 0) {
-                            toast("目录为空：请检查书源的 ruleToc 规则");
+                            if (group != null && group.size() > 1) {
+                                toast("这本书在 " + group.size()
+                                        + " 个书源里都有，但这个都取不到目录，请换源试试");
+                            } else {
+                                toast("目录为空：该书的 bookUrl 或 ruleToc 取不到章节");
+                            }
                         }
-                        Log.i(TAG, "detail: toc=" + toc.size() + " book=" + b.name);
+                        Log.i(TAG, "detail: toc=" + toc.size() + " book=" + b.name
+                                + " source=" + (source == null ? "?" : source.name));
                     }
                 });
             }
         });
         t.start();
+    }
+
+    /**
+     * The next candidate source for this book that is worth a request, or null.
+     *
+     * Ordering comes from {@link SourceSwitcher#ranked}, so a source that has served chapters
+     * before is tried before one that has never been opened; the currently failing source is
+     * skipped. Sources whose 目录 has failed every time are tried only as a last resort.
+     */
+    private BookSource firstWorkingAlternative(BookSource failed, Books.Book b) {
+        if (group == null || group.size() < 2) {
+            return null;
+        }
+        List<SourceSwitcher.SrcBook> ranked = SourceSwitcher.ranked(group);
+        String failedUrl = (failed == null) ? null : failed.url;
+        BookSource lastResort = null;
+        for (int i = 0; i < ranked.size(); i++) {
+            SourceSwitcher.SrcBook cand = ranked.get(i);
+            if (cand.sourceUrl.equals(failedUrl)
+                    || (cand.book != null && cand.book.bookUrl.equals(b.bookUrl))) {
+                continue;
+            }
+            BookSource alt = sourceStore.findByUrl(cand.sourceUrl);
+            if (alt != null) {
+                if (SourceHealth.rankForReading(alt.url) >= 4) {
+                    if (lastResort == null) {
+                        lastResort = alt;
+                    }
+                    continue;
+                }
+                return alt;
+            }
+        }
+        return lastResort;
+    }
+
+    /** The Book object the group holds for a source (carries that source's bookUrl). */
+    private Books.Book altBookFor(BookSource alt) {
+        if (group == null || alt == null) {
+            return null;
+        }
+        List<SourceSwitcher.SrcBook> ranked = SourceSwitcher.ranked(group);
+        for (int i = 0; i < ranked.size(); i++) {
+            if (ranked.get(i).sourceUrl.equals(alt.url)) {
+                return ranked.get(i).book;
+            }
+        }
+        return null;
+    }
+
+    private int indexInGroup(BookSource src) {
+        if (group == null || src == null) {
+            return -1;
+        }
+        for (int i = 0; i < group.size(); i++) {
+            if (src.url.equals(group.items.get(i).sourceUrl)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Move the screen onto a different source for this book. UI thread only. */
+    private void adoptSource(BookSource ns, Books.Book nb, int index, String note) {
+        if (ns == null || nb == null) {
+            return;
+        }
+        if (index >= 0) {
+            group.select(index);
+        }
+        source = ns;
+        book = nb;
+        book.sourceName = ns.name;
+        updateSwitchButton();
+        updateInfoMeta();
+        ((TextView) findViewById(com.jianyue.reader.R.id.detail_title)).setText(book.name);
+        if (infoNameView != null) {
+            infoNameView.setText(book.name);
+        }
+        if (infoIntroView != null) {
+            infoIntroView.setText(book.intro.length() > 0 ? book.intro : "（暂无简介）");
+        }
+        if (note != null) {
+            toast(note);
+        }
+        Log.i(TAG, "detail: auto-switched to " + ns.name);
     }
 
     // -------------------------------------------------------------- 换源

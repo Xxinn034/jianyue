@@ -92,6 +92,22 @@ public final class SourceSwitcher {
             primaryBookUrl = s.book == null ? "" : s.book.bookUrl;
             return s;
         }
+
+        /**
+         * How good the best source behind this book looks, lower being better. Used to rank
+         * books in the result list: a book offered only by sources that never produce
+         * chapters should not outrank one offered by a source that does.
+         */
+        public int bestRank() {
+            int best = 99;
+            for (int i = 0; i < items.size(); i++) {
+                int r = SourceHealth.rankForReading(items.get(i).sourceUrl);
+                if (r < best) {
+                    best = r;
+                }
+            }
+            return best;
+        }
     }
 
     private static final List<Group> GROUPS = new ArrayList<Group>();
@@ -153,5 +169,60 @@ public final class SourceSwitcher {
 
     public static synchronized int groupCount() {
         return GROUPS.size();
+    }
+
+    // ------------------------------------------------- candidate ordering
+
+    /**
+     * The group's sources ordered by how likely each is to actually SERVE the book.
+     *
+     * Every source did answer a search, so search health says nothing about whether its
+     * 目录 and 正文 work. {@link SourceHealth#rankForReading} carries the one signal that
+     * does - "this source has produced chapters before" - so the detail screen and the
+     * reader pick the same candidate for the same book (this method is the single ordering
+     * both of them use).
+     */
+    public static List<SrcBook> ranked(Group g) {
+        List<SrcBook> out = new ArrayList<SrcBook>();
+        if (g == null) {
+            return out;
+        }
+        for (int i = 0; i < g.items.size(); i++) {
+            out.add(g.items.get(i));
+        }
+        final String cur = g.primarySourceUrl;
+        java.util.Collections.sort(out, new java.util.Comparator<SrcBook>() {
+            public int compare(SrcBook a, SrcBook b) {
+                int ra = SourceHealth.rankForReading(a.sourceUrl);
+                int rb = SourceHealth.rankForReading(b.sourceUrl);
+                if (ra != rb) {
+                    return ra - rb;
+                }
+                // keep the currently selected source first inside its rank
+                boolean ca = a.sourceUrl.equals(cur);
+                boolean cb = b.sourceUrl.equals(cur);
+                if (ca != cb) {
+                    return ca ? -1 : 1;
+                }
+                return 0;
+            }
+        });
+        return out;
+    }
+
+    /** True when a book's title IS the searched title (not merely contains it). */
+    public static boolean titleMatches(Books.Book b, String keyword) {
+        return (b == null) ? false : titleMatches(b.name, keyword);
+    }
+
+    /**
+     * Same test on a bare title. Merging groups by {@link Engine#normalizeTitle} is what
+     * makes this the right comparison: 《诡舍》 and 诡舍（全本） are the same book to the
+     * engine, and both are the book the user typed.
+     */
+    public static boolean titleMatches(String title, String keyword) {
+        String a = com.jianyue.reader.engine.Engine.normalizeTitle(title);
+        String k = com.jianyue.reader.engine.Engine.normalizeTitle(keyword);
+        return a.length() > 0 && a.equals(k);
     }
 }

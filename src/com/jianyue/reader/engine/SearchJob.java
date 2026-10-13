@@ -67,6 +67,44 @@ public final class SearchJob {
     public static final int DEFAULT_BUDGET_MS = 180000;
 
     /**
+     * Connect timeout for a search request, in ms.
+     *
+     * Shorter than the default 8s on purpose. A search spends its time on sites that are
+     * never going to answer, and every one of them costs a full connect timeout (twice, when
+     * the URL is https and the fallback tries http). Measured on a real 227-source list:
+     * 208 sources failed, the search took 105s, and almost all of it was waiting. A live
+     * novel site answers a search in well under two seconds; four seconds is generous for
+     * the ones that are merely slow, and halves the price of the dead ones.
+     *
+     * 目录 and 正文 keep the full 8s: those are single requests the user is waiting on.
+     */
+    public static final int SEARCH_CONNECT_TIMEOUT_MS = 4000;
+
+    /**
+     * Whole-search budget actually used, in ms.
+     *
+     * {@link #DEFAULT_BUDGET_MS} is the value the engine is written against; this is what a
+     * run uses. A device whose network is pathologically slow (the API-1 emulator speaks
+     * only TLS 1.0, so every https site pays a handshake that fails) can raise it with the
+     * system property "jianyue.searchBudget", which is how the API-1 acceptance scripts keep
+     * their old 200s budget while a real phone stops wasting time on the tail.
+     */
+    public static int budgetMs() {
+        int def = 60000;
+        try {
+            String v = System.getProperty("jianyue.searchBudget");
+            if (v != null && v.trim().length() > 0) {
+                int n = Integer.parseInt(v.trim());
+                if (n >= 5000) {
+                    return n;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return def;
+    }
+
+    /**
      * How many pages may be decoded and parsed at once. Parsing is what allocates: a byte[]
      * body, its String, and the DOM built from it.
      */
@@ -109,7 +147,7 @@ public final class SearchJob {
      */
     public static List<Books.Book> run(List<BookSource> sources, String keyword, int page,
                                        List<String> failuresOut) {
-        return run(sources, keyword, page, failuresOut, null, DEFAULT_BUDGET_MS);
+        return run(sources, keyword, page, failuresOut, null, budgetMs());
     }
 
     public static List<Books.Book> run(List<BookSource> sources, String keyword, int page,
@@ -293,7 +331,7 @@ public final class SearchJob {
                 res.error = "搜索地址为空";
                 return res;
             }
-            Http.Resp r = Http.fetch(url, src.url, src.headers());
+            Http.Resp r = Http.fetch(url, src.url, src.headers(), SEARCH_CONNECT_TIMEOUT_MS);
             if (!r.ok() || r.code >= 400) {
                 res.error = (r.error != null) ? r.error : ("HTTP " + r.code);
                 res.unreachable = r.unreachable();

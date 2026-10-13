@@ -42,6 +42,30 @@ public final class Rules {
     public static final int CTX_JSON = 1;
     public static final int CTX_HTML = 2;
 
+    /**
+     * Does this response body hold JSON?
+     *
+     * Needed because 阅读 sources write a JSON list rule as either "$.data.list" or a bare
+     * "data.list" - and the bare form is indistinguishable from a CSS class selector. The
+     * BODY settles it: a page that starts with '{' or '[' is an API response, whatever the
+     * rule looks like. Measured failure this fixes: 百度小说 serves its 目录 from
+     * boxnovel.baidu.com as JSON with the rule "data.chapter.chapterInfo", which parsed as
+     * HTML, matched nothing, and left the user on a book with an empty 目录.
+     */
+    public static boolean looksLikeJson(String body) {
+        if (body == null) {
+            return false;
+        }
+        for (int i = 0; i < body.length() && i < 32; i++) {
+            char c = body.charAt(i);
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\uFEFF') {
+                continue;
+            }
+            return c == '{' || c == '[';
+        }
+        return false;
+    }
+
     // ------------------------------------------------------------ entry point
 
     /**
@@ -245,6 +269,39 @@ public final class Rules {
 
     private static String nz(String s) {
         return s == null ? "" : s;
+    }
+
+    /**
+     * Expand "{$.a.b}" placeholders against a JSON item.
+     *
+     * The single implementation of this substitution inside the rule engine; Engine's
+     * search-result URL builder delegates here so a template behaves the same wherever it
+     * appears (search bookUrl, 目录 chapterUrl, a content URL).
+     */
+    public static String substituteJsonFields(String template, JSONObject item) {
+        if (template == null || item == null) {
+            return template == null ? "" : template;
+        }
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        int n = template.length();
+        while (i < n) {
+            int open = template.indexOf("{$.", i);
+            if (open < 0) {
+                sb.append(template.substring(i));
+                break;
+            }
+            sb.append(template.substring(i, open));
+            int close = template.indexOf('}', open);
+            if (close < 0) {
+                sb.append(template.substring(open));
+                break;
+            }
+            String path = template.substring(open + 1, close);   // "$.a.b"
+            sb.append(JsonPath.firstString(item, path));
+            i = close + 1;
+        }
+        return sb.toString();
     }
 
     // ------------------------------------------------------- regex rule mode
@@ -923,9 +980,31 @@ public final class Rules {
         if (node instanceof List) {
             return rule;
         }
+        // A rule that embeds "{$.field}" placeholders is a TEMPLATE, not a selector. 阅读
+        // sources build chapter URLs this way - 百度小说's 目录 rule is
+        //   http://dushu.baidu.com/api/pc/getChapterContent?data=...%22{$.book_id}%22...
+        // and the whole URL comes from the JSON item, field by field. Without this branch
+        // the template fell through to the bare-name lookup below, matched no JSON field
+        // called "http://dushu...", and returned "". The 目录 then lost every chapter
+        // (names parsed fine, urls were all empty -> 0 chapters) which is exactly the
+        // "搜索有结果、点进去目录为空" symptom.
+        if (rule.indexOf("{$.", 1) >= 0 && node instanceof JSONObject) {
+            return substituteJsonFields(rule, (JSONObject) node);
+        }
         // bare name: JSON field when the node is JSON, CSS tag when it is HTML
         if (node instanceof JSONObject) {
             JSONObject o = (JSONObject) node;
+            // A DOTTED bare rule is a JSON path, not a key lookup. 阅读 sources write
+            // "data.novel.content" instead of "$.data.novel.content" (百度小说's 正文 rule is
+            // exactly that), and looking it up as one literal key name - which is what this
+            // did - silently returned "" for every chapter. Trying the first segment as a
+            // real key keeps a literal "a.b" field working if a site ever has one.
+            if (rule.indexOf('.') > 0) {
+                int dot = rule.indexOf('.');
+                if (o.has(rule.substring(0, dot))) {
+                    return JsonPath.firstString(o, rule);
+                }
+            }
             if (o.has(rule)) {
                 Object v = o.opt(rule);
                 if (v == null || v == JSONObject.NULL) {

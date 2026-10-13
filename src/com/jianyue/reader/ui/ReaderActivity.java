@@ -27,6 +27,7 @@ import com.jianyue.reader.model.BookSource;
 import com.jianyue.reader.model.Books;
 import com.jianyue.reader.model.LocalStore;
 import com.jianyue.reader.model.ProgressStore;
+import com.jianyue.reader.model.SourceHealth;
 import com.jianyue.reader.model.SourceStore;
 import com.jianyue.reader.model.SourceSwitcher;
 import com.jianyue.reader.util.Paragraphs;
@@ -890,13 +891,19 @@ public class ReaderActivity extends Activity {
                 if (tocNow.size() == 0) {
                     tocNow = Engine.loadToc(src, b);
                 }
+                if (src != null) {
+                    SourceHealth.recordRead(src.url, tocNow.size() > 0);
+                }
 
                 // 自动换源: the source this book opened with has no chapters. That is what
                 // "目录为空" means in practice, and the merged search usually knows a source
                 // that does work, so try them here rather than making the user back out.
+                // Candidates come from SourceSwitcher.ranked() - sources that have produced
+                // chapters before - so the first alternative tried is the most likely one.
                 if (tocNow.size() == 0 && group != null && group.size() > 1) {
-                    for (int i = 0; i < group.size(); i++) {
-                        SourceSwitcher.SrcBook cand = group.items.get(i);
+                    List<SourceSwitcher.SrcBook> cands = SourceSwitcher.ranked(group);
+                    for (int i = 0; i < cands.size(); i++) {
+                        SourceSwitcher.SrcBook cand = cands.get(i);
                         if (cand.sourceUrl.equals(b.sourceUrl)) {
                             continue;
                         }
@@ -907,13 +914,14 @@ public class ReaderActivity extends Activity {
                         Log.i(TAG, "reader: toc empty on " + (src == null ? "?" : src.name)
                                 + ", trying " + alt.name);
                         List<Books.Chapter> altToc = Engine.loadToc(alt, cand.book);
+                        SourceHealth.recordRead(alt.url, altToc.size() > 0);
                         if (altToc.size() > 0) {
                             tocNow = altToc;
                             altSrc[0] = alt;
                             final SourceSwitcher.SrcBook fcand = cand;
                             final BookSource falt = alt;
                             final List<Books.Chapter> fgot = altToc;
-                            final int fi = i;
+                            final int fi = group.items.indexOf(cand);
                             handler.post(new Runnable() {
                                 public void run() {
                                     applySwitchedSource(fcand, falt, fgot, fi);
@@ -959,6 +967,30 @@ public class ReaderActivity extends Activity {
                     content = cc.content;
                     if (cc.title != null && cc.title.length() > 0) {
                         title = cc.title;
+                    }
+                    // The chapter page loaded but produced no text at all (rule matched a
+                    // page that is a login wall, a VIP stub, or simply different HTML).
+                    // The 目录 said this source works, so only a 正文 failure can reveal it;
+                    // try the other sources for this book before showing the placeholder.
+                    if (cc.error != null && !switched && group != null && group.size() > 1) {
+                        ChapterFallback fb = loadChapterFromAlternative(src, c, cc);
+                        if (fb != null) {
+                            content = fb.content;
+                            if (fb.title != null && fb.title.length() > 0) {
+                                title = fb.title;
+                            }
+                            switched = true;
+                            final BookSource fs = fb.source;
+                            final List<Books.Chapter> ftoc = fb.toc;
+                            final SourceSwitcher.SrcBook fcb = fb.cand;
+                            final int fi = group.items.indexOf(fcb);
+                            handler.post(new Runnable() {
+                                public void run() {
+                                    applySwitchedSource(fcb, fs, ftoc, fi);
+                                    toast("原书源取不到正文，已自动换源：" + fs.name);
+                                }
+                            });
+                        }
                     }
                 }
                 final String ft = title;
@@ -1151,6 +1183,90 @@ public class ReaderActivity extends Activity {
         titleView.setText(book.name);
         updateFooter();
         Log.i(TAG, "reader: source -> " + ns.name + " toc=" + got.size());
+    }
+
+    /**
+     * A chapter salvaged from another source: the text, the chapter's title, the source it
+     * came from and that source's 目录 (so the reader keeps a chapter list to navigate).
+     */
+    private static final class ChapterFallback {
+        String content = "";
+        String title = "";
+        BookSource source;
+        SourceSwitcher.SrcBook cand;
+        List<Books.Chapter> toc = new ArrayList<Books.Chapter>();
+    }
+
+    /**
+     * The source this book opened with cannot produce 正文. Look for one that can.
+     *
+     * Candidates come from {@link SourceSwitcher#ranked} (sources that have served content
+     * before, first) and the current chapter is located by POSITION in the new 目录, because
+     * chapter numbering is not comparable between sources - the same rule 换源 uses. Only the
+     * first few candidates are tried: each one costs a 目录 request plus a chapter request,
+     * and this runs while the user waits in front of the page.
+     *
+     * Returns null when nothing worked, in which case the caller keeps the placeholder text.
+     */
+    private ChapterFallback loadChapterFromAlternative(BookSource failed, Books.Chapter chapter,
+                                                       Books.ChapterContent failedContent) {
+        if (group == null || group.size() < 2 || chapter == null) {
+            return null;
+        }
+        float ratio = 0f;
+        if (toc.size() > 0) {
+            ratio = (chapter.index + 0.5f) / (float) toc.size();
+        }
+        String failedUrl = (failed == null) ? null : failed.url;
+        String failedBookUrl = (book == null) ? null : book.bookUrl;
+        List<SourceSwitcher.SrcBook> cands = SourceSwitcher.ranked(group);
+        int tried = 0;
+        for (int i = 0; i < cands.size() && tried < 3; i++) {
+            SourceSwitcher.SrcBook cand = cands.get(i);
+            if (cand.sourceUrl.equals(failedUrl)
+                    || (cand.book != null && cand.book.bookUrl.equals(failedBookUrl))) {
+                continue;
+            }
+            BookSource alt = sourceStore.findByUrl(cand.sourceUrl);
+            if (alt == null) {
+                continue;
+            }
+            tried++;
+            try {
+                List<Books.Chapter> altToc = Engine.loadToc(alt, cand.book);
+                SourceHealth.recordRead(alt.url, altToc.size() > 0);
+                if (altToc.size() == 0) {
+                    continue;
+                }
+                int at = (int) (ratio * altToc.size());
+                if (at < 0) {
+                    at = 0;
+                }
+                if (at >= altToc.size()) {
+                    at = altToc.size() - 1;
+                }
+                Books.Chapter altChapter = altToc.get(at);
+                Books.ChapterContent altContent = Engine.loadContent(alt, altChapter);
+                if (altContent.error == null && altContent.content.length() > 0) {
+                    ChapterFallback out = new ChapterFallback();
+                    out.content = altContent.content;
+                    out.title = altContent.title;
+                    out.source = alt;
+                    out.cand = cand;
+                    out.toc = altToc;
+                    Log.i(TAG, "reader: content fallback to " + alt.name + " chapter " + at
+                            + "/" + altToc.size() + " chars=" + altContent.content.length()
+                            + " (original failed: " + failedContent.error + ")");
+                    return out;
+                }
+                Log.i(TAG, "reader: " + alt.name + " also has no content: "
+                        + altContent.error);
+            } catch (Throwable t) {
+                Log.i(TAG, "reader: fallback to " + alt.name + " failed: "
+                        + t.getClass().getName());
+            }
+        }
+        return null;
     }
 
     /** Persist the current position on whatever source is now in use. */
