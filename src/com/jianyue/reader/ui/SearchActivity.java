@@ -419,6 +419,9 @@ public class SearchActivity extends Activity {
             sb.append(i + 1).append('.').append(g.name);
             if (cur != null) {
                 sb.append('[').append(cur.sourceName).append(']');
+                // The identity the detail screen needs, so a host-driven test can open any
+                // row directly (am start ... -e name <title> -e bookUrl <url>).
+                sb.append('<').append(cur.book.bookUrl).append('>');
             }
             sb.append('/').append(g.size()).append("源");
         }
