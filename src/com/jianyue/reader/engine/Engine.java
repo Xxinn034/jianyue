@@ -69,11 +69,94 @@ public final class Engine {
                     com.jianyue.reader.net.UrlOptions.parse(src.searchUrl);
             String expanded = expandTemplate(uo.url, src, keyword, page);
             String abs = Rules.absUrl(src.url, expanded);
-            return abs + uo.tail;
+            return collapseDoubledHost(abs) + uo.tail;
         } catch (Throwable t) {
             Log.i(TAG, "engine.searchUrl failed " + t.getClass().getName() + ": " + t.getMessage());
             return "";
         }
+    }
+
+    /**
+     * Repair a search URL whose path starts with its own host: "https://so.a.com/www.a.com/x".
+     *
+     * This shape appears when a source's host has moved (so.a.com now serves the search) while
+     * its rule still writes the old absolute link ("https://{{key}}..." expanded to
+     * "www.a.com/..."). The doubled URL 404s, the source looks dead, and the book it could
+     * have served silently disappears from the results. Collapsing it costs nothing and
+     * rescues the source; the request is sent to the host the source declared.
+     */
+    static String collapseDoubledHost(String url) {
+        if (url == null || url.length() == 0) {
+            return url;
+        }
+        int schemeEnd = url.indexOf("://");
+        if (schemeEnd <= 0) {
+            return url;
+        }
+        int pathStart = url.indexOf('/', schemeEnd + 3);
+        if (pathStart < 0) {
+            return url;
+        }
+        String origin = url.substring(0, pathStart);
+        String host;
+        try {
+            host = new java.net.URL(origin).getHost();
+        } catch (Throwable t) {
+            return url;
+        }
+        if (host == null || host.length() == 0) {
+            return url;
+        }
+        String rest = url.substring(pathStart + 1);
+        int slash = rest.indexOf('/');
+        String firstSeg = (slash < 0) ? rest : rest.substring(0, slash);
+        if (firstSeg.length() == 0 || firstSeg.indexOf('.') < 0) {
+            return url;
+        }
+        // exactly the same host, or the same SITE with a different leading segment - the shape
+        // that actually occurs is so.ihuaben.com searching www.ihuaben.com (the rule still
+        // writes the old host). Both sides are reduced to their registrable suffix, so
+        // mail.a.com is not mistaken for a.com (different site) but www.a.com is.
+        boolean same = firstSeg.equalsIgnoreCase(host)
+                || siteOf(firstSeg).equals(siteOf(host));
+        if (!same) {
+            return url;
+        }
+        String fixed = origin + "/" + ((slash < 0) ? "" : rest.substring(slash + 1));
+        Log.i(TAG, "engine.searchUrl doubled host collapsed: " + url + " -> " + fixed);
+        return fixed;
+    }
+
+    private static String stripPrefix(String host) {
+        String h = host == null ? "" : host;
+        String[] prefixes = {"www.", "so.", "m.", "wap."};
+        for (int i = 0; i < prefixes.length; i++) {
+            if (h.startsWith(prefixes[i])) {
+                return h.substring(prefixes[i].length());
+            }
+        }
+        return h;
+    }
+
+    /**
+     * Last two labels of a host: "so.ihuaben.com" -> "ihuaben.com", "a.com" -> "a.com".
+     *
+     * Used only to recognise that two hosts are the same SITE behind different subdomains.
+     * Two-label comparison is the practical rule for the .com/.net/.cn sites book sources
+     * point at; a multi-part suffix such as ".co.uk" would compare as "co.uk" and could
+     * mismatched-collapse, which is why that case is not a concern here.
+     */
+    private static String siteOf(String host) {
+        if (host == null) {
+            return "";
+        }
+        String h = host.trim().toLowerCase();
+        int first = h.indexOf('.');
+        if (first < 0 || first + 1 >= h.length()) {
+            return h;
+        }
+        String rest = h.substring(first + 1);
+        return (rest.indexOf('.') < 0) ? h : rest;
     }
 
     /**

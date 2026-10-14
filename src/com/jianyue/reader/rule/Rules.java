@@ -1325,7 +1325,15 @@ public final class Rules {
             return u;
         }
         if (u.startsWith("//")) {
-            return "http:" + u;
+            // Protocol-relative. Take the SCHEME FROM THE BASE: 话本小说 (https) writes its
+            // book links as "//www.ihuaben.com/book/...", and hardcoding "http:" both
+            // downgraded an https site (a downgrade that some sites answer with a redirect
+            // and others with a refusal) and disagreed with what a browser would do. Only
+            // when there is no base to copy from does plain http remain a reasonable guess
+            // (an API-1 device cannot do TLS 1.2 anyway).
+            int se = (base == null) ? -1 : base.indexOf("://");
+            String scheme = (se > 0) ? base.substring(0, se) : "http";
+            return scheme + ":" + u;
         }
         if (base == null || base.length() == 0) {
             return u;
