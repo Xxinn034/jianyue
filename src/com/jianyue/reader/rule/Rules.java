@@ -804,6 +804,21 @@ public final class Rules {
                     joinTag = suffix;
                 }
             }
+            // A BARE list selector can carry the exclusion itself: "tbody tr!0" means "every
+            // row except the header row". 阅读 parses "!N[:M...]" wherever it sits, but this
+            // branch only looked after an "@", so the whole selector went to the CSS engine as
+            // the literal tag "tr!0" and matched nothing - the search row list came back empty
+            // (蚂蚁阅读/九五小说/晋江文学/新笔趣网 all write their bookList exactly this way).
+            if (exclude == null) {
+                int bang = sel.lastIndexOf('!');
+                if (bang > 0 && bang < sel.length() - 1) {
+                    List<Integer> ex = parseIndexList(sel.substring(bang + 1));
+                    if (ex.size() > 0) {
+                        exclude = ex;
+                        sel = sel.substring(0, bang).trim();
+                    }
+                }
+            }
             if (sel.startsWith("class.")) {
                 sel = "." + sel.substring(6);
             } else if (sel.startsWith("tag.")) {
@@ -960,10 +975,22 @@ public final class Rules {
         if (rule.startsWith("//") || rule.startsWith("/")) {
             return viaXPath(node, rule);
         }
-        // CSS selector
+        // CSS selector.
+        //
+        // A shorthand prefix is NOT the only way 阅读 writes a selector: plain tag selectors
+        // such as "a.1@text", "td.1@text", "dd h3 a@text" and "div#content@textNodes" are
+        // everywhere in real sources, and 阅读's AnalyzeByJSoup treats every rule containing
+        // "@" as "<selector>@<extraction>" whatever the prefix. Testing only for the prefixes
+        // let those rules fall through to the bare-name branch below, where Html.extract()
+        // looked up an attribute literally named "a.1@text", found nothing, and returned "" -
+        // so the field went silently empty and the book was dropped.
+        // Live case (2026-10-14): 玄幻阁 / 溜达小说 / 若雨中文 each serve a full page of 诡舍
+        // hits and their bookList parses 100 items, but every item's name and url were "",
+        // because of exactly this. 阅读 gets the book from all three; 简阅 got none.
         if (rule.startsWith("class.") || rule.startsWith("id.")
                 || rule.startsWith("tag.") || rule.startsWith(".")
-                || rule.startsWith("#")) {
+                || rule.startsWith("#")
+                || rule.lastIndexOf('@') > 0) {
             return viaCss(node, rule);
         }
         // JSONPath
@@ -1092,6 +1119,19 @@ public final class Rules {
             sel = sel.replace("tag.", "");
         }
         Html.El scope = (Html.El) node;
+        // "!N[:M...]" anywhere in the selector is 阅读's EXCLUSION list: "a!0@text" means every
+        // match except the first. Only the list branch used to look for it, so a field rule
+        // such as "dd!0@text" was passed to the CSS engine as the literal tag "dd!0", matched
+        // nothing and returned "" (10 sources in the 一程 list write a field this way).
+        List<Integer> exclude = null;
+        int bang = sel.lastIndexOf('!');
+        if (bang > 0 && bang < sel.length() - 1) {
+            List<Integer> ex = parseIndexList(sel.substring(bang + 1));
+            if (ex.size() > 0) {
+                exclude = ex;
+                sel = sel.substring(0, bang).trim();
+            }
+        }
         int[] box = new int[1];
         String bare = takeIndexSuffix(sel, box);
         if (box[0] != -9999) {
@@ -1121,6 +1161,9 @@ public final class Rules {
         }
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < all.size(); i++) {
+            if (exclude != null && exclude.contains(Integer.valueOf(i))) {
+                continue;
+            }
             String v = (suffix == null) ? Html.collapse(all.get(i).allText())
                     : Html.extract(all.get(i), suffix);
             if (v == null || v.length() == 0) {
