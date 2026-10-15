@@ -365,6 +365,13 @@ public class MainActivity extends Activity {
 
     /** What a long press does: selection mode, with that row already ticked. */
     private void enterEditMode(int position) {
+        // Drop the search box: while the user is ticking books the box must not keep focus. On a
+        // device that is not in touch mode the focused box also keeps the soft keyboard up, and
+        // that keyboard covers the very list being edited (measured on the 320x480 test phone).
+        View search = findViewById(R.id.shelf_search_input);
+        if (search != null) {
+            search.clearFocus();
+        }
         setEditMode(true);
         toggleSelection(position);
     }
