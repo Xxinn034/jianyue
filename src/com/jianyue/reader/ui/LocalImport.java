@@ -8,11 +8,15 @@ import java.io.File;
 
 import com.jianyue.reader.model.Books;
 import com.jianyue.reader.model.LocalStore;
-import com.jianyue.reader.model.ProgressStore;
 
 /**
  * Import one local book file (txt / epub / html): copy it into the app, cut it into chapters
- * ONCE, put it on the shelf and open it.
+ * ONCE, list it on the 本地导入 page and open it.
+ *
+ * The import deliberately does NOT put the book on the 书架 page. 本地导入 is the list of files
+ * the user owns, 书架 is the list they chose to keep: to move a book between the two, long-press
+ * it on the 本地导入 page and pick 加入书架. Reading it is not a decision to keep it either -
+ * the reading position is remembered (ProgressStore, shelf flag off), the shelf is not touched.
  *
  * One entry point on purpose. There are two callers - the 「本地导入」 page's + button and
  * MainActivity's host-driven `importBook` extra - and they must behave identically, otherwise
@@ -28,7 +32,7 @@ final class LocalImport {
 
     /** Import outcome, on the UI thread. */
     interface Done {
-        /** The book is on the shelf; the caller decides whether to open it. */
+        /** The book is in the local library; the caller decides whether to open it. */
         void onImported(Books.Book book);
 
         void onFailed(String error);
@@ -37,8 +41,7 @@ final class LocalImport {
     private LocalImport() {
     }
 
-    static void start(final Activity a, final ProgressStore store, final LocalStore local,
-                      final String path, final Done done) {
+    static void start(final Activity a, final LocalStore local, final String path, final Done done) {
         if (path == null || path.length() == 0) {
             return;
         }
@@ -62,9 +65,9 @@ final class LocalImport {
                         b.sourceUrl = LocalStore.SOURCE_URL;
                         b.bookUrl = lb.id;
                         b.sourceName = LocalStore.SOURCE_NAME + " · " + lb.format;
-                        store.save(b, 0, lb.chapters.get(0).name, 0);
                         Log.i(TAG, "import: added '" + lb.title + "' id=" + lb.id
-                                + " format=" + lb.format + " chapters=" + lb.size());
+                                + " format=" + lb.format + " chapters=" + lb.size()
+                                + " (not on the shelf until the user asks)");
                         done.onImported(b);
                     }
                 });

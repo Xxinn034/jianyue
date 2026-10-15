@@ -64,6 +64,80 @@
         android:layout_height="1dip"
         android:background="@color/divider" />
 
+    <!--
+      Batch-edit bar. Hidden until a long press enters selection mode; then it carries the
+      全选 / 删除 actions, next to 完成 which leaves the mode without deleting anything.
+      Modelled on the 书源 page's bar (act_sources.xml) so the two screens read the same.
+
+      It has its own row instead of replacing the search box: the layout does not jump when
+      the mode is entered, and the search box keeps its position under the finger.
+    -->
+    <LinearLayout
+        android:id="@+id/shelf_batch_bar"
+        android:layout_width="fill_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:visibility="gone"
+        android:background="@color/accent_light"
+        android:gravity="center_vertical"
+        android:paddingLeft="14dip"
+        android:paddingRight="8dip"
+        android:paddingTop="7dip"
+        android:paddingBottom="7dip">
+
+        <TextView
+            android:id="@+id/shelf_sel_info"
+            android:layout_width="0dip"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="13sp"
+            android:textColor="@color/text_secondary"
+            android:text="已选 0 本" />
+
+        <TextView
+            android:id="@+id/btn_shelf_done"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="10dip"
+            android:paddingRight="10dip"
+            android:paddingTop="4dip"
+            android:paddingBottom="4dip"
+            android:textSize="13sp"
+            android:textColor="@color/text_secondary"
+            android:text="完成" />
+
+        <TextView
+            android:id="@+id/btn_shelf_select_all"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="4dip"
+            android:paddingLeft="10dip"
+            android:paddingRight="10dip"
+            android:paddingTop="4dip"
+            android:paddingBottom="4dip"
+            android:textSize="13sp"
+            android:textColor="@color/accent"
+            android:text="全选" />
+
+        <TextView
+            android:id="@+id/btn_shelf_delete"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="4dip"
+            android:paddingLeft="10dip"
+            android:paddingRight="10dip"
+            android:paddingTop="4dip"
+            android:paddingBottom="4dip"
+            android:textSize="13sp"
+            android:textColor="#FFC62828"
+            android:text="删除" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="fill_parent"
+        android:layout_height="1dip"
+        android:background="@color/divider" />
+
     <FrameLayout
         android:layout_width="fill_parent"
         android:layout_height="0dip"
@@ -86,7 +160,7 @@
             android:textSize="14sp"
             android:textColor="@color/text_hint"
             android:lineSpacingExtra="6dip"
-            android:text="书架是空的\n\n在上面输入书名，点右边的放大镜\n到「本地导入」页点 + 可以读本地书" />
+            android:text="书架是空的\n\n在上面输入书名，点右边的放大镜\n本地书在「本地导入」页，长按可以加入书架" />
     </FrameLayout>
 
     <View

@@ -72,7 +72,7 @@ public class BookDetailActivity extends Activity {
         setContentView(com.jianyue.reader.R.layout.act_detail);
 
         sourceStore = new SourceStore(this);
-        progressStore = new ProgressStore(this);
+        progressStore = ProgressStore.get(this);
 
         String sourceUrl = getIntent().getStringExtra("sourceUrl");
         book = new Books.Book();
@@ -505,13 +505,16 @@ public class BookDetailActivity extends Activity {
     /**
      * Put the book on the shelf without starting to read it.
      *
-     * This is what the header button does; it records the book at chapter 0 so the shelf
-     * has something to show, and is idempotent because ProgressStore keys on
-     * sourceUrl + bookUrl.
+     * This is what the header button does. addToShelf (not save) is what makes the decision
+     * explicit: for a book that already has progress the position is left alone, and a fresh
+     * entry is given chapter 0 plus the first chapter's name so the shelf row has something to
+     * show. Idempotent, because ProgressStore keys on sourceUrl + bookUrl.
      */
     private void addToShelf() {
-        String name = (toc.size() > 0) ? toc.get(0).name : "";
-        progressStore.save(book, 0, name, 0);
+        ProgressStore.Entry e = progressStore.addToShelf(book);
+        if (e != null && e.chapterName.length() == 0 && toc.size() > 0) {
+            progressStore.save(book, e.chapterIndex, toc.get(0).name, e.charOffset);
+        }
         toast("已加入书架：" + book.name);
         Log.i(TAG, "detail: added to shelf " + book.name);
     }
