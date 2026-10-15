@@ -196,7 +196,7 @@ function Put-AppFile($source, $appPath) {
 # Read the live framebuffer page as a PNG. No screencap on this device; see the header.
 function Save-Shot($file) {
     & $adb -s $Dev shell input keyevent 111 2>&1 | Out-Null   # close the IME, if any
-    Start-Sleep -Seconds 1
+    Start-Sleep -Seconds 2
     $fb = Shell "cat /sys/class/graphics/fb0/virtual_size"
     $bpp = Shell "cat /sys/class/graphics/fb0/bits_per_pixel"
     $pan = Shell "cat /sys/class/graphics/fb0/pan"
@@ -411,6 +411,11 @@ try {
     $m = LastMatch $out "layout: local editModeOff=false selected=0"
     Check "leaving the local mode clears the selection" $m.Success $m.Value
     Dump-Log $out "6. local page edit mode"
+    # A separate start with edit mode left ON: the layout dump above ends by leaving the mode, so
+    # a shot taken after it would show a page with no checkboxes and no bar.
+    $out = Start-Page "LocalActivity" @('-e', 'editMode', '1') 8
+    $m = LastMatch $out "local: edit active=true selected=1/(\d+)"
+    Check "local selection mode stays on screen" $m.Success $m.Value
     Save-Shot "$outDir\verify-local-edit.png" | Out-Null
 
     # --------------------------------------------------------- 7. deletions
