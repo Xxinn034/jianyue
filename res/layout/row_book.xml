@@ -1,16 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Shelf row: title on top, secondary line under it. No cover art, by design. -->
+<!--
+  Shelf row: title on top, secondary line under it. No cover art, by design.
+
+  The checkbox is always laid out but is only VISIBLE in batch-edit mode (long press), so the
+  row keeps its old appearance and the shelf only grows the tick when the user asks for it.
+  Same shape as row_source.xml on the 书源 page on purpose: one selection gesture, one look.
+
+  This layout is shared: the shelf, the 本地导入 list and the chapter list of the detail
+  screen all inflate it. The checkbox stays GONE for the chapter list, so nothing changes
+  there. The row's own padding moved onto the inner block, because the outer box is now
+  horizontal and its left edge also holds the checkbox.
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    style="@style/Row">
+    style="@style/Row"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingLeft="12dip"
+    android:paddingRight="12dip"
+    android:paddingTop="0dip"
+    android:paddingBottom="0dip">
 
-    <TextView
-        android:id="@+id/row_title"
-        style="@style/RowTitle"
-        android:text="书名" />
+    <CheckBox
+        android:id="@+id/row_check"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:focusable="false"
+        android:clickable="false" />
 
-    <TextView
-        android:id="@+id/row_sub"
-        style="@style/RowSub"
-        android:text="副标题" />
+    <LinearLayout
+        android:layout_width="0dip"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:paddingTop="13dip"
+        android:paddingBottom="13dip">
+
+        <TextView
+            android:id="@+id/row_title"
+            style="@style/RowTitle"
+            android:text="书名" />
+
+        <TextView
+            android:id="@+id/row_sub"
+            style="@style/RowSub"
+            android:text="副标题" />
+    </LinearLayout>
 
 </LinearLayout>

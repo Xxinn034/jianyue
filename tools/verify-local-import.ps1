@@ -161,7 +161,9 @@ if ($m3.Success -and $t.Success) {
 & $adb -s $dev shell am start -f $CLEAR_TOP -n "$pkg/.ui.LocalActivity" -e layoutDump 1 2>&1 | Out-Null
 Start-Sleep -Seconds 10
 $out = Logs
-$m = LastMatch $out "page: local books=(\d+)"
+# The page logs "files" (imported files, i.e. LocalStore) since importing no longer puts a book
+# on the shelf, so this is the count that has to include the imports above.
+$m = LastMatch $out "page: local files=(\d+)"
 Check "local page lists the imports" ($m.Success -and [int]$m.Groups[1].Value -ge 1) $m.Value
 $e = LastMatch $out "layout: local_empty text=(.+)"
 Check "empty-state wording logged" $e.Success $e.Value

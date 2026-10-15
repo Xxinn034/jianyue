@@ -161,8 +161,8 @@ public class ReaderActivity extends Activity {
         setContentView(R.layout.act_reader);
 
         sourceStore = new SourceStore(this);
-        progressStore = new ProgressStore(this);
-        localStore = new LocalStore(this);
+        progressStore = ProgressStore.get(this);
+        localStore = LocalStore.get(this);
 
         root = findViewById(R.id.read_root);
         topBar = findViewById(R.id.read_top_bar);
@@ -208,7 +208,10 @@ public class ReaderActivity extends Activity {
                 savedOffset = saved.charOffset;
             }
         }
-        shelfAdded = (saved != null);
+        // "is it on the shelf" is the entry's shelf flag, not the existence of a progress entry:
+        // an imported local book has progress from the moment it is opened, but it only reaches
+        // the 书架 when the user picks 加入书架.
+        shelfAdded = (saved != null && saved.shelf);
         if (source != null) {
             book.sourceName = source.name;
         }
@@ -1076,6 +1079,9 @@ public class ReaderActivity extends Activity {
         String name = (chapterIndex >= 0 && chapterIndex < toc.size())
                 ? toc.get(chapterIndex).name : "";
         progressStore.save(book, chapterIndex, name, currentOffset());
+        // save() records where the user is; addToShelf() is the decision to KEEP the book, which
+        // is the only thing that moves an imported local book onto the 书架.
+        progressStore.addToShelf(book);
         shelfAdded = true;
         toast("已加入书架：" + book.name);
         Log.i(TAG, "reader: added to shelf " + book.name);

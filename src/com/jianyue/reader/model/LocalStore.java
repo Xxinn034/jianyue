@@ -37,6 +37,11 @@ import com.jianyue.reader.util.TextSplitter;
  *
  * Supported: .txt (UTF-8 / GBK / UTF-16), .epub (2.0 and 3.0), .html / .htm.
  *
+ * ONE INSTANCE PER PROCESS (see get), for the same reason as ProgressStore: index.json has
+ * to have a single in-memory owner. Two copies meant the shelf could still hold a book the
+ * local page had already deleted, and the next save from the shelf would write that book
+ * back into the index - with its .dat file gone, i.e. an unreadable entry that reappears.
+ *
  * API-1 notes: no try-with-resources, no String.isEmpty(), no java.nio, no SQLite.
  */
 public class LocalStore {
@@ -47,6 +52,9 @@ public class LocalStore {
     private static final String TAG = "JianYue";
     private static final String DIR_NAME = "local";
     private static final String INDEX_NAME = "index.json";
+
+    /** The single in-memory copy; see the class comment. */
+    private static LocalStore instance;
 
     /**
      * Refuse to import anything bigger. A whole novel is 1-5 MB; the import holds the
@@ -78,6 +86,23 @@ public class LocalStore {
         public int size() {
             return chapters.size();
         }
+
+        /**
+         * The shape the reader and the shelf understand.
+         *
+         * Lives here so the import path and the 本地导入 list produce the SAME book object:
+         * both call it, so the reader cannot be handed two different identities for one file
+         * (which would split its reading progress in two).
+         */
+        public Books.Book toBook() {
+            Books.Book b = new Books.Book();
+            b.name = title;
+            b.author = author;
+            b.sourceUrl = SOURCE_URL;
+            b.bookUrl = id;
+            b.sourceName = SOURCE_NAME + " · " + format;
+            return b;
+        }
     }
 
     public static class ImportResult {
@@ -94,7 +119,21 @@ public class LocalStore {
     /** Byte cursor while one import writes its .dat file (single-threaded, reset per import). */
     private long writePos;
 
-    public LocalStore(Context ctx) {
+    /**
+     * The local library of this process. Every caller must come through here.
+     *
+     * A second instance is a second copy of index.json in memory, and the two then
+     * overwrite each other on save.
+     */
+    public static synchronized LocalStore get(Context ctx) {
+        if (instance == null) {
+            instance = new LocalStore(ctx);
+        }
+        return instance;
+    }
+
+    /** Only reads the Context's files dir, so no Activity is retained. */
+    private LocalStore(Context ctx) {
         File base = null;
         try {
             base = ctx.getFilesDir();
