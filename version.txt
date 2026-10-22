@@ -20,4 +20,4 @@
 #     (see build-reader.ps1 $keyStore). A different key = users must uninstall
 #     first = their books/progress/sources are gone.
 #
-1.0.1
+1.0.2
